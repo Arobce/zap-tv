@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<tv generator-info-name="test">
+  <channel id="bbc1.uk">
+    <display-name>BBC One</display-name>
+    <display-name>BBC 1</display-name>
+    <display-name lang="en">BBC One HD</display-name>
+    <icon src="http://logos.invalid/bbc1.png" />
+  </channel>
+  <channel id="espn.us">
+    <display-name>ESPN</display-name>
+  </channel>
+  <channel id="no-name.xx">
+  </channel>
+  <programme start="20260904183000 +0000" stop="20260904193000 +0000" channel="bbc1.uk">
+    <title>The Six O'Clock News</title>
+    <sub-title>Evening Edition</sub-title>
+    <desc>National and international news.</desc>
+    <category>News</category>
+    <episode-num system="xmltv_ns">0.1.0/1</episode-num>
+  </programme>
+  <programme start="20260904193000 +0000" stop="20260904200000 +0000" channel="bbc1.uk">
+    <title>Regional News &amp; Weather</title>
+  </programme>
+  <programme start="20260904180000 -0500" stop="20260904190000 -0500" channel="espn.us">
+    <title>SportsCenter</title>
+    <desc>Highlights &amp; analysis.</desc>
+    <category>Sports</category>
+  </programme>
+  <programme start="20260904200000" stop="20260904210000" channel="espn.us">
+    <title>No Offset Programme</title>
+  </programme>
+  <programme start="not-a-timestamp" stop="20260904220000 +0000" channel="espn.us">
+    <title>Unparseable Start</title>
+  </programme>
+  <programme start="20260904220000 +0000" stop="20260904230000 +0000" channel="unknown.channel">
+    <title>Orphan Programme</title>
+  </programme>
+</tv>
