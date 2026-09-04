@@ -119,6 +119,31 @@ public sealed class FlexibleInt64Converter : JsonConverter<long>
         => writer.WriteNumberValue(value);
 }
 
+/// <summary>
+/// Reads a <see cref="long"/>? from a JSON number or string, preserving absent.
+/// </summary>
+/// <remarks>
+/// Used for the unix-seconds fields (<c>added</c>, <c>exp_date</c>), where absent must not
+/// collapse to zero: 1970 is a real timestamp and would silently mean "expired".
+/// </remarks>
+public sealed class FlexibleNullableInt64Converter : JsonConverter<long?>
+{
+    public override long? Read(ref Utf8JsonReader reader, Type typeToConvert, JsonSerializerOptions options)
+        => FlexibleReader.ReadOptionalInt64(ref reader);
+
+    public override void Write(Utf8JsonWriter writer, long? value, JsonSerializerOptions options)
+    {
+        if (value is null)
+        {
+            writer.WriteNullValue();
+        }
+        else
+        {
+            writer.WriteNumberValue(value.Value);
+        }
+    }
+}
+
 /// <summary>Reads a <see cref="bool"/> from <c>0</c>/<c>1</c>, <c>"0"</c>/<c>"1"</c>, or a literal.</summary>
 /// <remarks>
 /// <c>auth</c> arrives as a number, <c>tv_archive</c> as a number, and other panels send

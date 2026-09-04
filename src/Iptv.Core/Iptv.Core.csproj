@@ -6,8 +6,14 @@
       Iptv.Core is deliberately platform-agnostic and UI-free. It must stay buildable
       without the Windows App SDK so that ingest, parsing and matching logic can be
       tested on any machine and in CI without a WinUI workload.
+
+      Not marked IsTrimmable. That flag was set speculatively during scaffolding and
+      nothing requires it: the PRD ships a self-contained ReadyToRun build, WinUI 3 does
+      not trim, and the installed size is budgeted at 120-180MB regardless. Keeping it
+      would force reflection-free JSON source generation purely to satisfy a capability
+      the app never uses. If AOT becomes a goal, add a JsonSerializerContext at that
+      point, with the 75MB series payload as the benchmark to justify it.
     -->
-    <IsTrimmable>true</IsTrimmable>
   </PropertyGroup>
 
   <ItemGroup>

@@ -44,9 +44,15 @@ demonstrated **without** prebuffering before Step 2 is worth building.
 Single-connection accounts appear to be common at the consumer end of the market. Phase 7
 should be validated against one throughout, not only against a multi-connection account.
 
-### 2. 71.6% of live channels have no EPG id
+### 2. 72.7% of live channels have no EPG id
 
-Of 28,285 live streams, **20,249 report `epg_channel_id: null`** and only 8,036 carry one.
+Of 28,285 live streams, **20,556 have no usable `epg_channel_id`**; only 7,729 carry one.
+
+An earlier pass over the raw JSON counted 20,249 by grepping for the literal
+`"epg_channel_id":null`. Deserializing properly raises it by 307, because those entries
+send `""` rather than `null`. Both mean "no EPG id", which is exactly why the string
+converter normalizes empty to null — otherwise 307 channels would carry an EPG id that
+matches nothing and would be counted as covered.
 
 This inverts the Phase 4 design assumption. Tier 1 (exact `tvg_id` match) has a hard
 ceiling of 28% coverage on this provider. Name-based matching is not a fallback — it is
