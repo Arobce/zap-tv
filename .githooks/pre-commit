@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+#
+# Blocks a commit that contains any value from .local/provider.env.
+#
+# Real provider credentials are useful test data precisely because they are realistic,
+# which is exactly why they end up pasted into a fixture or an assertion. This has already
+# happened once during development: the account username and password were used verbatim
+# in CredentialScrubberTests before being caught by a manual scan.
+#
+# Local-only by design. The secrets are not in the repository, so CI has nothing to
+# compare against; this runs where the secrets actually live.
+
+set -euo pipefail
+
+env_file=".local/provider.env"
+[ -f "$env_file" ] || exit 0
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -n "$staged" ] || exit 0
+
+status=0
+
+while IFS='=' read -r key value; do
+    # Skip blanks, comments, and short values that would match everywhere.
+    case "$key" in ''|\#*) continue ;; esac
+    [ ${#value} -ge 6 ] || continue
+
+    while IFS= read -r file; do
+        [ -f "$file" ] || continue
+        if git show ":$file" 2>/dev/null | grep -qF -- "$value"; then
+            echo "BLOCKED: $file contains the value of $key from $env_file" >&2
+            status=1
+        fi
+    done <<< "$staged"
+done < "$env_file"
+
+if [ "$status" -ne 0 ]; then
+    cat >&2 <<'MSG'
+
+A staged file contains a real provider credential.
+
+Use synthetic values in tests and fixtures. If this is a false positive, commit
+with --no-verify, but check first: a leaked credential hands over a working
+subscription, and rewriting published history is far more work than editing now.
+MSG
+fi
+
+exit "$status"
