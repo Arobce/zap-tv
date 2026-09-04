@@ -1,0 +1,18 @@
+#EXTM3U x-tvg-url="http://example.invalid/epg.xml.gz"
+#EXTINF:-1 tvg-id="bbc1.uk" tvg-name="BBC One" tvg-logo="http://example.invalid/bbc1.png" group-title="UK",BBC One HD
+http://example.invalid/live/user/pass/1001.ts
+#EXTINF:-1 tvg-id="bbc2.uk" group-title="UK",BBC Two HD
+http://example.invalid/live/user/pass/1002.ts
+
+#EXTINF:-1,No Attributes Channel
+http://example.invalid/live/user/pass/1003.ts
+#EXTINF:-1 tvg-id="espn.us" group-title="Sports, USA",US: ESPN FHD
+http://example.invalid/live/user/pass/1004.ts
+#EXTINF:-1 tvg-id="tsn.ca" catchup="shift" catchup-source="http://example.invalid/ts/1005" catchup-days="7",CA - TSN
+http://example.invalid/live/user/pass/1005.ts
+#EXTINF:7200 tvg-id=movie.vod tvg-name=Unquoted,Some Movie (2024)
+http://example.invalid/movie/user/pass/2001.mp4
+#EXTGRP:Ignored Directive
+#EXTVLCOPT:network-caching=1000
+#EXTINF:-1 tvg-id="after.directives",Channel After Directives
+http://example.invalid/live/user/pass/1006.ts
