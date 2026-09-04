@@ -1,7 +1,7 @@
 # PRD — Windows IPTV Player
 
 **Target agent:** Claude Code
-**Platform:** Windows 10 1809+ / Windows 11, x64 (ARM64 pending Phase 0 spike)
+**Platform:** Windows 10 1809+ / Windows 11, x64 and ARM64
 **Stack:** .NET 10 (LTS), C#, WinUI 3 (Windows App SDK), libmpv render API, SQLite + FTS5
 
 ---
@@ -96,9 +96,18 @@ Four timeboxed spikes. Each produces a short file in `docs/decisions/`. Throwawa
 
 The video presentation design in Phase 5 depends on which render backends your libmpv build actually exposes. Establish this before writing any interop.
 
-Obtain the headers for the exact libmpv build you intend to ship and enumerate the values of `MPV_RENDER_API_TYPE_*` in `render.h`. The public render API has historically offered **OpenGL** and **SW** only — there is no documented D3D11 render backend that hands you a texture, despite mpv using D3D11 internally for `--gpu-api=d3d11`. If that is what you find, the ANGLE path in 0.2 is the primary design, not a fallback.
+**Resolved, and it invalidated the original design.** `render.h` in the shipping build (client API 2.5) defines exactly two backends:
 
-Record: which backends exist, which mpv version, and the chosen presentation path.
+```c
+#define MPV_RENDER_API_TYPE_OPENGL "opengl"
+#define MPV_RENDER_API_TYPE_SW     "sw"
+```
+
+**There is no D3D11 render API.** No `render_d3d11.h`, and no header mentions D3D11 or DXGI at all. The version of this document that specified rendering "into a D3D11 texture" as the primary path described something libmpv does not provide. mpv uses D3D11 internally for `--gpu-api=d3d11`, but that is mpv choosing a backend for its own window; it never hands the embedder a texture.
+
+The presentation path is therefore **OpenGL over ANGLE**, as detailed in Phase 5. See [0001](docs/decisions/0001-libmpv-render-api.md).
+
+Re-run this inventory when upgrading libmpv. It is a one-line grep for `MPV_RENDER_API_TYPE`, and it is the cheapest check in this document relative to what it prevents.
 
 ### 0.2 — Compositing spike (3 days) — BLOCKING, highest risk in the project
 
@@ -114,7 +123,7 @@ If this cannot be made to work in three days, stop and escalate. Every UI decisi
 
 ### 0.3 — ARM64 feasibility (half day)
 
-Determine whether a maintained ARM64 Windows libmpv build exists. Compiling mpv yourself is out of scope per Phase 5. If no build exists, the decision is x64-only, running under emulation on ARM64 devices, and Phase 10 must be amended to drop the `win-arm64` RID.
+**Resolved.** A maintained ARM64 build ships alongside x64 in the same shinchiro release (`mpv-dev-aarch64-*`), so `win-arm64` stays. See [0003](docs/decisions/0003-arm64-feasibility.md). Not yet validated on ARM64 hardware — buildable and shippable, not tested.
 
 ### 0.4 — SQLite ingest throughput floor (half day)
 
@@ -503,7 +512,7 @@ Required surface:
 The presentation target is a **`SwapChainPanel`** via `ISwapChainPanelNative.SetSwapChain`, so that XAML composites correctly above and below the video. What feeds that swap chain depends on Phase 0.1:
 
 - **Expected primary path — OpenGL render API over ANGLE.** `mpv_render_context_create` with `MPV_RENDER_API_TYPE_OPENGL`, an ANGLE EGL context whose backing device is D3D11, rendering to a texture shared with the swap chain. ANGLE ships with the Windows App SDK, so this adds no new redistributable.
-- **If 0.1 finds a D3D11 render API in your build,** prefer it — it removes a translation layer — and amend this section with the concrete API.
+- **There is no D3D11 render API to prefer.** Spike 0.1 confirmed `render.h` offers only `opengl` and `sw`. Re-check on a libmpv upgrade; if one ever appears it removes a translation layer and is worth adopting.
 - **Debug-only fallback — `MPV_RENDER_API_TYPE_SW`** into a `WriteableBitmap`. Acceptable for diagnosing a broken GPU path. Never shipped as the default; it burns CPU and will not hold 1080i.
 
 Keep the presentation layer behind an interface (`IVideoPresenter`) with the swap-chain plumbing on one side and mpv on the other, so the backend decision stays swappable if a future mpv release changes what is offered.
@@ -700,7 +709,7 @@ Full keyboard control is a differentiator: arrow navigation, number entry for di
 
 - **Velopack** for installer and delta auto-update. It is the maintained successor to Squirrel and is substantially less friction than MSIX for self-distribution.
 - Code signing certificate is required, not optional. Unsigned installers trigger SmartScreen warnings that will stop most users cold. Note that OV and EV code signing certificates both now require hardware or HSM key storage, so a token is a baseline requirement rather than an upgrade; EV builds SmartScreen reputation faster.
-- Publish self-contained per-RID with `PublishReadyToRun=true`. `win-x64` always; `win-arm64` **only if Phase 0.3 found a usable ARM64 libmpv build** — otherwise x64 only, running under emulation on ARM64 devices, and say so on the download page.
+- Publish self-contained per-RID with `PublishReadyToRun=true`: `win-x64` and `win-arm64`, each carrying the matching `libmpv-2.dll`. Shipping the x64 binary in an ARM64 package fails at load time with an error that reads as a missing dependency rather than an architecture mismatch.
 - Expect roughly 120–180MB installed once libmpv is included.
 - Ship an unpackaged build too — HTPC users often want a portable folder.
 
