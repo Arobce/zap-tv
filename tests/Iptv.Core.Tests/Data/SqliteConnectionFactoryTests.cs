@@ -60,6 +60,21 @@ public sealed class SqliteConnectionFactoryTests : IDisposable
     }
 
     [Fact]
+    public async Task Open_enables_foreign_key_enforcement()
+    {
+        var factory = new SqliteConnectionFactory(_dbPath);
+
+        await using var connection = await factory.OpenAsync(CancellationToken.None);
+
+        // Microsoft.Data.Sqlite happens to enable this by default, so this asserts the
+        // outcome rather than our pragma. That is deliberate: what matters is that
+        // connections from this factory enforce cascades, however that comes about.
+        // Verified to have teeth - setting ForeignKeys=false on the connection string
+        // fails this test.
+        Assert.Equal("1", await ScalarAsync(connection, "PRAGMA foreign_keys;"));
+    }
+
+    [Fact]
     public async Task Open_enables_memory_mapped_io()
     {
         var factory = new SqliteConnectionFactory(_dbPath);

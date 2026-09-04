@@ -30,6 +30,12 @@ public sealed class SqliteConnectionFactory
         "PRAGMA temp_store=MEMORY;",
         "PRAGMA mmap_size=268435456;",
         "PRAGMA cache_size=-64000;",
+        // Raw SQLite defaults foreign keys OFF per connection; Microsoft.Data.Sqlite
+        // turns them on for us. Stated explicitly anyway so the guarantee survives a
+        // provider swap or a connection-string change: the schema is full of
+        // ON DELETE CASCADE, and without enforcement, deleting a provider would
+        // silently orphan its streams and their health history instead of cascading.
+        "PRAGMA foreign_keys=ON;",
     ];
 
     private readonly string _connectionString;

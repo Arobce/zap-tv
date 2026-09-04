@@ -296,9 +296,12 @@ PRAGMA synchronous=NORMAL;
 PRAGMA temp_store=MEMORY;
 PRAGMA mmap_size=268435456;
 PRAGMA cache_size=-64000;
+PRAGMA foreign_keys=ON;
 ```
 
 WAL matters because the EPG refresh writes while the UI reads. Without it, the grid stutters during background sync.
+
+`foreign_keys` is stated explicitly because the schema is full of `ON DELETE CASCADE`, and cascades are inert without it. Raw SQLite defaults it **off** per connection; `Microsoft.Data.Sqlite` happens to turn it on. Do not rely on that — set it, so the guarantee survives a provider change or a connection-string edit.
 
 `cache_size=-64000` is 64MB **per connection**, and `Microsoft.Data.Sqlite` pools connections per connection string. Keep the pool small and deliberate — one long-lived reader for the UI, one writer — rather than opening ad-hoc connections from repositories and multiplying the cache budget by the pool size.
 

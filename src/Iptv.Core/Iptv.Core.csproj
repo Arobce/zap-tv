@@ -16,6 +16,15 @@
   </ItemGroup>
 
   <!--
+    Migrations ship as embedded resources so the schema cannot drift from the assembly
+    that applies it, and so a published build has no loose .sql files to lose.
+    Migrator discovers them by the NNN_Name.sql naming convention.
+  -->
+  <ItemGroup>
+    <EmbeddedResource Include="Data\Migrations\*.sql" />
+  </ItemGroup>
+
+  <!--
     PRD Phase 2 / standing prohibitions: Iptv.Core must never reference UI packages.
     Core notifies the UI through IAsyncEnumerable<T>, Channel<T> or plain events; if a
     DispatcherQueue is needed to make something work, the abstraction is wrong.
