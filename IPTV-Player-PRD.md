@@ -1,14 +1,18 @@
 # PRD — Windows IPTV Player
 
 **Target agent:** Claude Code
-**Platform:** Windows 10 1809+ / Windows 11, x64 and ARM64
+**Platform:** Windows 10 1809+ / Windows 11, x64 (ARM64 pending Phase 0 spike)
 **Stack:** .NET 9, C#, WinUI 3 (Windows App SDK), libmpv render API, SQLite + FTS5
 
 ---
 
 ## 0. How to use this document
 
-Build in the phase order given. Each phase ends with an **Exit criteria** block — do not start the next phase until every item passes. Phases 1–3 have no UI; they are validated by a console harness and tests. This is deliberate. The riskiest parts of this project are EPG ingest performance and mpv interop, and both are far cheaper to get wrong in a console app than inside a XAML view.
+Build in the phase order given. Each phase ends with an **Exit criteria** block — do not start the next phase until every item passes. Phases 1–5 have no UI; they are validated by a console harness and tests. This is deliberate. The riskiest parts of this project are EPG ingest performance and mpv interop, and both are far cheaper to get wrong in a console app than inside a XAML view.
+
+The exception is Phase 6, which stops and builds a deliberately minimal usable app before the expensive UI work begins. Harnesses prove throughput; they do not tell you whether the thing is any good against real providers.
+
+**Phase 0 comes before all of it and is not optional.** Three of the constraints in this document — the video presentation path, the ARM64 target, and the EPG ingest budget — are assumptions, not established facts. Phase 0 turns each one into a decision record. If a spike invalidates an assumption, amend this document before continuing rather than building around it.
 
 When a decision in this document conflicts with a plausible-looking tutorial or Stack Overflow answer, follow this document. Several of the constraints below exist specifically because the obvious approach fails.
 
@@ -22,16 +26,19 @@ The app ships no content, no bundled playlists, no default provider, and no chan
 
 ### What makes it better than existing players
 
-These four items are the product. Everything else is table stakes.
+These five items are the product. Everything else is table stakes.
 
-1. **Sub-second channel change.** Existing players take 3–6 seconds. Target p50 under 800ms via a warm second decoder.
+1. **Sub-second channel change.** Existing players take 3–6 seconds. Target p50 under 800ms.
 2. **Multi-provider merge with automatic failover.** Users commonly hold 2–3 subscriptions. Deduplicate channels across them, and when a stream stalls, transparently switch to another provider's copy of the same channel.
 3. **A genuinely fast EPG grid.** 2D-virtualized, scrolls at refresh rate with 20k channels loaded.
 4. **Instant search.** FTS5 across channels, VOD, series, and programme titles. Results as you type, no debounce longer than 80ms.
+5. **A guide that is actually populated.** Automatic EPG-to-channel matching with a visible coverage metric and a manual remap UI. Competing players routinely leave a third of the guide empty and give the user no way to fix it. See Phase 4.
 
 ### Explicit non-goals for v1
 
 Recording/DVR, transcoding, casting, mobile or TV builds, account sync, plugin system.
+
+Resume position for VOD and series ("continue watching") is **in scope** — it is not DVR, it is table stakes for anything that plays a two-hour file.
 
 ---
 
@@ -39,23 +46,24 @@ Recording/DVR, transcoding, casting, mobile or TV builds, account sync, plugin s
 
 ```
 Iptv.sln
+  CLAUDE.md               <- repo root, not docs/. Claude Code reads it from here.
   src/
     Iptv.Core/            net9.0 — no UI package references, ever
       Xtream/             player_api.php client + DTOs
       Playlists/          M3U/M3U8 streaming parser
-      Epg/                XMLTV pull-parser, ingest pipeline
+      Epg/                XMLTV pull-parser, ingest pipeline, channel matching
       Data/               SQLite context, migrations, repositories
       Sources/            provider merge, channel identity, failover policy
       Metadata/           TMDB enrichment (optional feature)
       Models/             domain records
-    Iptv.Mpv/             net9.0-windows — P/Invoke, render context, D3D11 interop
+    Iptv.Mpv/             net9.0-windows — P/Invoke, render context, GPU interop
     Iptv.App/             WinUI 3, MVVM, packaged
     Iptv.Harness/         console app for timing ingest and playback smoke tests
   tests/
     Iptv.Core.Tests/
     Iptv.Mpv.Tests/
   docs/
-    CLAUDE.md
+    decisions/            one file per Phase 0 spike outcome
 ```
 
 `Iptv.Core` must not reference `Microsoft.WindowsAppSDK`, `Microsoft.UI.Xaml`, or `CommunityToolkit.Mvvm`. Enforce this with a build check. If core logic needs to notify the UI, it exposes `IAsyncEnumerable<T>`, `Channel<T>`, or plain events — never `DispatcherQueue`.
@@ -68,17 +76,63 @@ Iptv.sln
 - `Microsoft.Data.Sqlite` — must be the SQLitePCLRaw bundle with FTS5 enabled (`SQLitePCLRaw.bundle_e_sqlite3`)
 - `System.Threading.Channels`
 - `Serilog` + `Serilog.Sinks.File`
-- `Velopack` (packaging/update, Phase 8)
+- `Velopack` (packaging/update, Phase 10)
 
 Use raw ADO.NET via `Microsoft.Data.Sqlite` for the bulk ingest path. EF Core is acceptable for CRUD on settings and providers but must not be used for programme inserts.
 
 ---
 
-## 3. Phase 1 — Data layer and schema
+## 3. Phase 0 — De-risking spikes
+
+Four timeboxed spikes. Each produces a short file in `docs/decisions/`. Throwaway code; do not carry it forward.
+
+### 0.1 — libmpv render API inventory (1 day) — BLOCKING
+
+The video presentation design in Phase 5 depends on which render backends your libmpv build actually exposes. Establish this before writing any interop.
+
+Obtain the headers for the exact libmpv build you intend to ship and enumerate the values of `MPV_RENDER_API_TYPE_*` in `render.h`. The public render API has historically offered **OpenGL** and **SW** only — there is no documented D3D11 render backend that hands you a texture, despite mpv using D3D11 internally for `--gpu-api=d3d11`. If that is what you find, the ANGLE path in 0.2 is the primary design, not a fallback.
+
+Record: which backends exist, which mpv version, and the chosen presentation path.
+
+### 0.2 — Compositing spike (3 days) — BLOCKING, highest risk in the project
+
+Smallest possible WinUI 3 app. No MVVM, no DI, no navigation. It must:
+
+- Create an mpv render context using the backend chosen in 0.1 (expected: OpenGL via ANGLE, whose backing device is D3D11).
+- Render into a texture shared with the XAML compositor and present it through a `SwapChainPanel` via `ISwapChainPanelNative.SetSwapChain`.
+- Play a live MPEG-TS stream.
+- Draw a semi-transparent XAML `Border` with text over the video and confirm it composites correctly.
+- Survive resize and DPI change without corruption.
+
+If this cannot be made to work in three days, stop and escalate. Every UI decision downstream assumes it. Do not resolve a failure here by reaching for `--wid` — see the prohibition in Phase 5.
+
+### 0.3 — ARM64 feasibility (half day)
+
+Determine whether a maintained ARM64 Windows libmpv build exists. Compiling mpv yourself is out of scope per Phase 5. If no build exists, the decision is x64-only, running under emulation on ARM64 devices, and Phase 10 must be amended to drop the `win-arm64` RID.
+
+### 0.4 — SQLite ingest throughput floor (half day)
+
+Before committing to the Phase 3 budget, measure the machine rather than the theory. Generate ~2M synthetic programme rows and measure sustained insert rate through one prepared command, 5,000-row transactions, WAL + `synchronous=NORMAL`, no indexes and no FTS.
+
+The Phase 3 target only holds if you clear roughly 400k rows/s. If the real number is materially lower, revise the Phase 3 exit criteria now rather than discovering it as a failed gate later.
+
+**Exit criteria**
+- Four decision records written to `docs/decisions/`.
+- 0.2 demonstrated on at least one machine and recorded as a short screen capture.
+- Phases 5 and 10 amended in this document if 0.1 or 0.3 contradict them.
+
+---
+
+## 4. Phase 1 — Data layer and schema
 
 ### Schema
 
 ```sql
+CREATE TABLE meta (                  -- schema/algorithm versioning, see Normalization versioning
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);
+
 CREATE TABLE providers (
   id INTEGER PRIMARY KEY,
   name TEXT NOT NULL,
@@ -88,14 +142,30 @@ CREATE TABLE providers (
   epg_url TEXT,
   priority INTEGER NOT NULL DEFAULT 0,   -- lower wins during failover
   max_connections INTEGER,
+  epg_offset_minutes INTEGER NOT NULL DEFAULT 0,
   enabled INTEGER NOT NULL DEFAULT 1,
   last_sync_utc TEXT
 );
 
+CREATE TABLE series (
+  id INTEGER PRIMARY KEY,
+  provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
+  provider_series_id TEXT NOT NULL,
+  title TEXT NOT NULL,
+  normalized_title TEXT NOT NULL,
+  series_key TEXT NOT NULL,              -- cross-provider identity, same derivation as channel_key
+  plot TEXT,
+  cover_url TEXT,
+  year INTEGER,
+  tmdb_id INTEGER,
+  UNIQUE(provider_id, provider_series_id)
+);
+CREATE INDEX ix_series_key ON series(series_key);
+
 CREATE TABLE streams (
   id INTEGER PRIMARY KEY,
   provider_id INTEGER NOT NULL REFERENCES providers(id) ON DELETE CASCADE,
-  provider_stream_id TEXT NOT NULL,      -- Xtream stream_id or M3U tvg-id
+  provider_stream_id TEXT NOT NULL,      -- Xtream stream_id; for M3U see "Stable identity" in Phase 2
   kind TEXT NOT NULL,                    -- 'live' | 'vod' | 'series_episode'
   title TEXT NOT NULL,
   normalized_title TEXT NOT NULL,        -- see Channel identity
@@ -104,20 +174,51 @@ CREATE TABLE streams (
   category_id TEXT,
   url TEXT NOT NULL,
   container TEXT,                        -- 'ts' | 'm3u8' | 'mp4' | 'mkv'
+  quality TEXT,                          -- 'UHD' | 'FHD' | 'HD' | 'SD' | NULL — parsed from title, never discarded
   channel_key TEXT NOT NULL,             -- cross-provider identity
+  catchup_kind TEXT,                     -- M3U 'catchup' attribute, NULL if unsupported
+  catchup_source TEXT,
+  catchup_days INTEGER,
+  series_id INTEGER REFERENCES series(id) ON DELETE CASCADE,   -- kind='series_episode' only
+  season_num INTEGER,
+  episode_num INTEGER,
+  is_active INTEGER NOT NULL DEFAULT 1,  -- soft delete on re-sync, see Provider re-sync semantics
+  last_seen_utc INTEGER,
   UNIQUE(provider_id, provider_stream_id, kind)
 );
 CREATE INDEX ix_streams_channel_key ON streams(channel_key);
 CREATE INDEX ix_streams_kind_category ON streams(kind, category_id);
+CREATE INDEX ix_streams_series ON streams(series_id, season_num, episode_num);
 
 CREATE TABLE channels (              -- merged logical channel across providers
   channel_key TEXT PRIMARY KEY,
   display_name TEXT NOT NULL,
   logo_url TEXT,
-  epg_channel_id TEXT,
+  country TEXT,                      -- parsed prefix/group; used as a failover guard
   user_sort_order INTEGER,
   is_favorite INTEGER NOT NULL DEFAULT 0,
   is_hidden INTEGER NOT NULL DEFAULT 0
+);
+```
+
+Note that `channels` carries no `epg_channel_id`. EPG association lives in `epg_map` below, so automatic matching and manual overrides have one home and one source of truth.
+
+```sql
+CREATE TABLE epg_channels (          -- every <channel> element seen in an XMLTV source
+  epg_channel_id TEXT PRIMARY KEY,
+  display_names TEXT NOT NULL,       -- all <display-name> values, newline-separated
+  normalized_names TEXT NOT NULL,    -- each name normalized, newline-separated
+  icon_url TEXT,
+  source_provider_id INTEGER REFERENCES providers(id) ON DELETE CASCADE
+);
+
+CREATE TABLE epg_map (
+  channel_key TEXT PRIMARY KEY REFERENCES channels(channel_key) ON DELETE CASCADE,
+  epg_channel_id TEXT NOT NULL,
+  confidence REAL NOT NULL,          -- 0..1
+  method TEXT NOT NULL,              -- 'tvg_id' | 'display_name' | 'normalized' | 'fuzzy' | 'manual'
+  locked INTEGER NOT NULL DEFAULT 0, -- user override; automatic matching must never overwrite a locked row
+  updated_utc INTEGER NOT NULL
 );
 
 CREATE TABLE programmes (
@@ -133,6 +234,14 @@ CREATE TABLE programmes (
 );
 CREATE INDEX ix_programmes_lookup ON programmes(epg_channel_id, start_utc, stop_utc);
 
+CREATE TABLE playback_state (        -- continue-watching; keyed on content, not on stream id
+  content_key TEXT PRIMARY KEY,      -- channel_key of the VOD item or episode
+  position_secs INTEGER NOT NULL,
+  duration_secs INTEGER,
+  completed INTEGER NOT NULL DEFAULT 0,
+  updated_utc INTEGER NOT NULL
+);
+
 CREATE TABLE stream_health (
   stream_id INTEGER NOT NULL REFERENCES streams(id) ON DELETE CASCADE,
   attempted_utc INTEGER NOT NULL,
@@ -146,12 +255,30 @@ CREATE VIRTUAL TABLE streams_fts USING fts5(
   title, content='streams', content_rowid='id', tokenize='unicode61 remove_diacritics 2'
 );
 CREATE VIRTUAL TABLE programmes_fts USING fts5(
-  title, description, content='programmes', content_rowid='id',
+  title, content='programmes', content_rowid='id',
   tokenize='unicode61 remove_diacritics 2'
 );
 ```
 
-Keep FTS tables in sync with triggers on insert/update/delete, but **drop the triggers before bulk ingest and rebuild the index afterward** with `INSERT INTO streams_fts(streams_fts) VALUES('rebuild')`. Trigger-per-row on a 50k insert is a large fraction of ingest time.
+`programmes_fts` indexes **title only**. Indexing `description` across millions of programmes multiplies index size and rebuild time for a search nobody asked for. If description search is wanted later, make it an opt-in setting that triggers a one-time reindex.
+
+Keep FTS tables in sync with triggers on insert/update/delete for ordinary CRUD, but **drop the triggers before bulk ingest and rebuild the index afterward** with `INSERT INTO streams_fts(streams_fts) VALUES('rebuild')`. Trigger-per-row on a 50k insert is a large fraction of ingest time.
+
+### External-content FTS and the EPG table swap
+
+These two designs collide, and the collision must be handled explicitly rather than discovered. `programmes_fts` is bound to the *table name* `programmes` and to its rowids. The Phase 3 staging-and-swap therefore leaves the FTS index pointing at content that no longer exists.
+
+The rule: after the swap transaction commits, always run `INSERT INTO programmes_fts(programmes_fts) VALUES('rebuild')`. Never try to preserve the old index across a swap. Budget that rebuild as ingest time — the Phase 3 exit criteria state parse/insert and total-ingest numbers separately for exactly this reason.
+
+### Normalization versioning
+
+`channel_key` is derived from the normalization function, and `channels.is_favorite`, `is_hidden`, and `user_sort_order` all hang off `channel_key`. Any change to the normalization rules therefore silently relocates every user's favourites.
+
+Store the algorithm version in `meta` under `normalization_version`. Any change to normalization increments it, and the migration shipping that change must rewrite `channel_key` across `streams`, `channels`, `epg_map`, and `playback_state` in one transaction, remapping user state onto the new keys. Treat this as a schema migration, because it is one.
+
+### Retention
+
+`stream_health` is append-only, and every playback attempt and failover probe writes to it. Prune on app start: delete rows older than 90 days, and keep at most the 500 most recent rows per `stream_id`. Without this the diagnostics queries degrade over months of use.
 
 ### Connection configuration
 
@@ -167,16 +294,19 @@ PRAGMA cache_size=-64000;
 
 WAL matters because the EPG refresh writes while the UI reads. Without it, the grid stutters during background sync.
 
+`cache_size=-64000` is 64MB **per connection**, and `Microsoft.Data.Sqlite` pools connections per connection string. Keep the pool small and deliberate — one long-lived reader for the UI, one writer — rather than opening ad-hoc connections from repositories and multiplying the cache budget by the pool size.
+
 Store the database at `%LOCALAPPDATA%\IptvPlayer\library.db`. Logs beside it in `logs\`.
 
 **Exit criteria**
 - Migrations run from empty to current on a fresh machine.
-- A test inserts 200k programme rows and queries "what is on channel X at time T" in under 5ms.
+- A test loads 200k programme rows across 2,000 EPG channels and serves the **grid window query** — 200 `epg_channel_id` values against a 3-hour window — in under 15ms. The single-channel point lookup is not a meaningful benchmark; the grid window is what the UI actually issues.
+- A normalization migration test: bump `normalization_version`, run the migration, assert favourites and sort order survive.
 - FTS5 confirmed available at runtime; app fails loudly at startup if not.
 
 ---
 
-## 4. Phase 2 — Provider ingest
+## 5. Phase 2 — Provider ingest
 
 ### Xtream Codes client
 
@@ -199,7 +329,27 @@ Use one `SocketsHttpHandler` for the app lifetime with `PooledConnectionLifetime
 
 ### M3U parser
 
-Forward-only line reader over the response stream. Never `ReadToEnd`. Parse `#EXTINF` attributes (`tvg-id`, `tvg-name`, `tvg-logo`, `group-title`, `catchup`, `catchup-source`) with a span-based scanner rather than regex — a 50k-entry playlist is where naive regex parsing costs seconds.
+Forward-only line reader over the response stream. Never `ReadToEnd`. Parse `#EXTINF` attributes (`tvg-id`, `tvg-name`, `tvg-logo`, `group-title`, `catchup`, `catchup-source`, `catchup-days`) with a span-based scanner rather than regex — a 50k-entry playlist is where naive regex parsing costs seconds.
+
+### Stable identity for M3U entries
+
+`provider_stream_id` is straightforward for Xtream and a trap for M3U. `tvg-id` is routinely empty and routinely duplicated within a single playlist, so using it directly both violates `UNIQUE(provider_id, provider_stream_id, kind)` and makes identity churn on every refresh — which silently destroys favourites and sort order.
+
+Derivation, in priority order:
+1. `tvg-id` when present, non-empty, **and** unique within the playlist.
+2. Otherwise a synthetic id: a stable hash of the stream URL with the credential segment removed, since providers rotate credentials in URLs but keep the path.
+3. If the URL is also unstable, hash `normalized_title` + `group-title`.
+
+Log which strategy each provider fell back to. A provider on strategy 3 will produce lower-quality dedup, and the diagnostics view should say so.
+
+### Provider re-sync semantics
+
+Sync is a **merge, never a replace**. A refresh must not delete and recreate rows, because everything the user owns is attached to those keys.
+
+- Upsert on `UNIQUE(provider_id, provider_stream_id, kind)`.
+- Streams absent from the new payload are marked `is_active = 0` rather than deleted, and hard-deleted only once `last_seen_utc` is more than 30 days old. Providers routinely drop channels for a few hours and bring them back.
+- `channels`, `epg_map`, `playback_state` are never touched by a provider sync except to add rows for newly-seen `channel_key` values.
+- Report a sync summary: added, updated, deactivated, reactivated. Surface it in the Providers view.
 
 ### Channel identity (cross-provider dedup)
 
@@ -209,43 +359,82 @@ Forward-only line reader over the response stream. Never `ReadToEnd`. Parse `#EX
 
 Normalization for `normalized_title`: lowercase, strip diacritics, remove quality markers (`HD`, `FHD`, `UHD`, `4K`, `SD`, `H265`, `HEVC`, `RAW`, `[...]`, `(...)`), strip country prefixes when they duplicate a group (`US:`, `UK|`, `CA -`), collapse whitespace, remove non-alphanumerics.
 
-Keep quality as a separate parsed field — do not discard it. Users want to prefer the UHD copy while still failing over to the HD one.
+Keep quality as a separate parsed field in `streams.quality` — do not discard it. Users want to prefer the UHD copy while still failing over to the HD one.
+
+Capture the stripped country prefix into `channels.country` rather than throwing it away. Normalization deliberately collapses `US: ESPN` and `UK| ESPN` onto the same key, and Phase 8 needs the country to avoid failing over between two genuinely different channels.
 
 **Exit criteria**
 - `Iptv.Harness` syncs a real Xtream account end to end and prints counts and elapsed time per stage.
 - A 50k-line M3U parses in under 1.5s and allocates under 100MB peak.
 - Two providers with overlapping channels produce a merged channel list with correct dedup, verified by a unit test with fixture data.
+- Re-sync test: sync a fixture, favourite a channel, sync a mutated fixture with entries removed and reordered, assert the favourite survives and removals are deactivated rather than deleted.
 
 ---
 
-## 5. Phase 3 — EPG ingest
+## 6. Phase 3 — EPG ingest
 
-This is the phase most likely to be built badly. The requirement is a 120MB XMLTV file parsed and indexed in **under 8 seconds** on a mid-range machine.
+This is the phase most likely to be built badly. The requirement is a 120MB XMLTV file parsed and indexed fast enough that a background refresh is invisible to the user.
 
 ### Rules
 
 - `XmlReader` with `Async = true`, `DtdProcessing = DtdProcessing.Prohibit`, `IgnoreWhitespace = true`. Never `XDocument`, `XmlDocument`, or `XmlSerializer` over the whole document.
 - Detect and stream-decompress `.gz` transparently (`GZipStream`), since most EPG URLs serve gzip.
 - Parse XMLTV timestamps (`20260904183000 +0000`) with a hand-written parser. `DateTime.ParseExact` with multiple candidate formats in a hot loop is measurably slow at this volume. Store as unix seconds.
+- Capture every `<channel>` element into `epg_channels`, including **all** `<display-name>` values, not just the first. Phase 4 matching depends on having them, and they are free to collect here.
 - Producer/consumer over `Channel.CreateBounded<Programme>(10_000)` with `SingleReader = true, SingleWriter = true, FullMode = Wait`. The bound provides backpressure so the parser can't run far ahead of the writer and balloon memory.
 - Consumer batches 5,000 rows per transaction using **one** prepared `SqliteCommand`, resetting parameter values per row rather than recreating the command.
 - Ingest into a staging table, then swap. A failed or partial EPG download must never leave the user with a half-empty guide.
+- Create indexes on the staging table **after** the bulk load completes, not before. Maintaining `ix_programmes_lookup` per row across millions of inserts is pure waste when you can build it once over sorted data.
+- After the swap, rebuild `programmes_fts` — see "External-content FTS and the EPG table swap" in Phase 1.
 - Delete programmes older than 24h and further out than the configured horizon (default 14 days) after each ingest.
 
 ### Timezone
 
-XMLTV offsets are frequently wrong or absent. Store UTC, display local, and expose a per-provider offset correction in settings. Users will need it.
+XMLTV offsets are frequently wrong or absent. Store UTC, display local, and apply `providers.epg_offset_minutes` as a per-provider correction exposed in settings. Users will need it.
 
 **Exit criteria**
-- Harness ingests a 100MB+ XMLTV in under 8s with peak working set under 400MB.
+- Harness ingests a 100MB+ XMLTV: **parse + insert + swap under 8s**, and **total wall-clock including index build and FTS rebuild under 15s**, with peak working set under 400MB. Report both numbers separately every run; a regression in one is diagnostically different from a regression in the other.
+- If Phase 0.4 established a lower throughput ceiling on the target hardware, these numbers are amended to match it and this line records the change.
 - Ingest runs concurrently with reads without blocking a simulated UI query loop (WAL verification).
 - Cancellation mid-ingest leaves the previous EPG intact.
 
 ---
 
-## 6. Phase 4 — mpv interop
+## 7. Phase 4 — EPG channel mapping
 
-Build this as a standalone library validated by a console harness that opens a window and plays a stream, before any XAML exists.
+The single most common complaint about every IPTV player on the market is an empty guide. It happens because provider `tvg-id` values do not match XMLTV `<channel id>` values — they differ between providers, they differ from the EPG source, and they change without warning. Phase 3 gives you programmes; this phase is what makes them visible.
+
+Treat coverage as a headline product metric, not an implementation detail.
+
+### Matching pipeline
+
+Run after every EPG ingest and every provider sync. Rows in `epg_map` with `locked = 1` are never modified.
+
+1. **Exact tvg_id.** `streams.tvg_id` equals `epg_channels.epg_channel_id`, case-insensitive. `method='tvg_id'`, confidence 1.0.
+2. **Exact display name.** `normalized_title` equals any of `epg_channels.normalized_names`. `method='display_name'`, confidence 0.9.
+3. **Normalized match with country agreement.** As above but after full normalization, and only when `channels.country` is absent on one side or agrees on both. `method='normalized'`, confidence 0.75.
+4. **Fuzzy.** Token-set similarity over normalized names, accepted only above a threshold (start at 0.85) and only with country agreement. `method='fuzzy'`, confidence = the score.
+
+Ambiguity rule: when a channel matches multiple EPG channels at the same tier, record no mapping. A wrong guide is worse than a missing one — users trust what the grid says and will miss the thing they wanted to watch.
+
+### Coverage and manual remap
+
+- Compute coverage after each run: matched channels / total visible channels, and the same broken down per provider. Store the run in `meta` and show it in Diagnostics.
+- The Channels view shows an unmistakable "no guide data" state per channel, with a one-click "Map EPG…" action.
+- The remap UI: a searchable list of unmapped channels on the left, candidate `epg_channels` on the right ranked by the same similarity score, with the top candidate preselected. Confirming writes `epg_map` with `method='manual'`, `locked=1`.
+- Offer a bulk action for the common case where an entire provider is offset by a naming convention (a shared prefix or suffix).
+- Manual mappings are user data. Include them in settings export and never discard them on provider sync, EPG refresh, or normalization migration.
+
+**Exit criteria**
+- Against a real provider plus its real EPG source, automatic coverage is at least 85%, and the harness prints the figure with a per-tier breakdown.
+- Zero ambiguous auto-mappings written: a fixture with two channels matching one EPG entry produces no mapping, not an arbitrary one.
+- A locked manual mapping survives an EPG refresh, a provider re-sync, and a normalization version bump.
+
+---
+
+## 8. Phase 5 — mpv interop
+
+Build this as a standalone library validated by a console harness that opens a window and plays a stream, before any XAML exists. The presentation path here is whatever Phase 0.1 and 0.2 established — if those spikes contradict this section, the spikes win and this section gets amended.
 
 ### Binaries
 
@@ -266,11 +455,15 @@ Required surface:
 
 ### Video presentation — the critical constraint
 
-**Do not use `--wid` HWND embedding.** It creates an airspace violation: the video HWND renders above all XAML, so channel overlays, the EPG panel, and context menus cannot draw on top of the video. This is not fixable with z-order.
+**Do not use `--wid` HWND embedding.** It creates an airspace violation: the video HWND renders above all XAML, so channel overlays, the EPG panel, and context menus cannot draw on top of the video. This is not fixable with z-order, and it is not an acceptable escape hatch when the render path is being difficult.
 
-Instead: create the mpv render context, render into a D3D11 texture, and present it through a **`SwapChainPanel`** using `ISwapChainPanelNative.SetSwapChain`. XAML composites correctly above and below the panel.
+The presentation target is a **`SwapChainPanel`** via `ISwapChainPanelNative.SetSwapChain`, so that XAML composites correctly above and below the video. What feeds that swap chain depends on Phase 0.1:
 
-If the D3D11 render API path proves unstable in your mpv build, the fallback order is (a) OpenGL render API via ANGLE into a shared surface, then (b) `sw` render API into a `WriteableBitmap` for a debug-only path. Do not fall back to `--wid`.
+- **Expected primary path — OpenGL render API over ANGLE.** `mpv_render_context_create` with `MPV_RENDER_API_TYPE_OPENGL`, an ANGLE EGL context whose backing device is D3D11, rendering to a texture shared with the swap chain. ANGLE ships with the Windows App SDK, so this adds no new redistributable.
+- **If 0.1 finds a D3D11 render API in your build,** prefer it — it removes a translation layer — and amend this section with the concrete API.
+- **Debug-only fallback — `MPV_RENDER_API_TYPE_SW`** into a `WriteableBitmap`. Acceptable for diagnosing a broken GPU path. Never shipped as the default; it burns CPU and will not hold 1080i.
+
+Keep the presentation layer behind an interface (`IVideoPresenter`) with the swap-chain plumbing on one side and mpv on the other, so the backend decision stays swappable if a future mpv release changes what is offered.
 
 ### Threading
 
@@ -295,7 +488,7 @@ deinterlace=auto
 
 Apply a different option set for VOD — large readahead, no low-latency profile, seeking enabled. Switching profiles per content kind is a real quality difference.
 
-After the first frame, read `hwdec-current` and log it. Silent fallback to software decode on 1080i content is a common failure that presents as "the app is slow."
+After the first frame, read `hwdec-current` and log it. Accept `d3d11va` **or** `d3d11va-copy` as hardware decoding; `auto-safe` frequently resolves to the copy variant and that is not a failure. Anything else means software decode, which on 1080i presents to users as "the app is slow" — surface it in Diagnostics rather than letting it pass silently.
 
 ### Property observation
 
@@ -304,69 +497,136 @@ Observe at minimum: `pause`, `time-pos`, `duration`, `demuxer-cache-time`, `cach
 **Exit criteria**
 - Harness plays a raw MPEG-TS live stream and an MP4 VOD file in the same session.
 - Video composites correctly under a semi-transparent XAML overlay.
-- `hwdec-current` resolves to `d3d11va` on Intel, NVIDIA, and AMD test machines.
+- `hwdec-current` resolves to `d3d11va` or `d3d11va-copy` on Intel, NVIDIA, and AMD test machines, and which one is logged per machine.
 - No crash after 200 sequential `loadfile` calls (leak check on render context lifetime).
 
 ---
 
-## 7. Phase 5 — Fast channel change
+## 9. Phase 6 — Vertical slice
+
+Stop and build something usable. One provider, the channel list, and playback. No EPG grid, no failover, no dedup UI, no VOD, no settings beyond what is needed to add one provider.
+
+Everything before this point is validated by harnesses, which are excellent at proving throughput and useless at exposing the problems that only appear with real providers and a real person operating the app. Ship this to yourself and use it as your TV for a week before starting the expensive UI work.
+
+Scope:
+- Add one provider, sync, ingest its EPG.
+- Virtualized channel list with logo and now/next from the Phase 4 mapping.
+- Play, stop, volume, fullscreen. Overlay with channel name and current programme.
+- Diagnostics showing EPG coverage, `hwdec-current`, and time-to-first-frame.
+
+What a week of use is meant to surface, and what a harness cannot:
+- Whether the Phase 4 coverage figure holds against *your* providers, and whether the failures are systematic (fixable in matching) or random (needing the manual UI).
+- Whether channel-change latency is dominated by connection setup, demuxer probing, or decode — which decides how much of Phase 7 is worth building.
+- Whether compositing survives real GPU drivers, sleep/resume, display change, and multi-monitor.
+
+**Exit criteria**
+- Used as a primary TV app for five consecutive days.
+- A written list of what actually hurt, and Phases 7–9 amended in response.
+- Baseline cold-start channel-change latency recorded, broken down into connect / first-packet / first-frame.
+
+---
+
+## 10. Phase 7 — Fast channel change
+
+Sub-second channel change has a cheap half and an expensive half. Do the cheap half first and measure before building the expensive half.
+
+### Step 1 — tune the cold path
+
+This helps **every** channel change, including the ones no predictor anticipates, and costs no extra provider connection. Using the Phase 6 baseline, tune and measure individually:
+
+- `demuxer-lavf-o=probesize=...,analyzeduration=...` — the single biggest lever on TS streams. mpv's defaults are tuned for correctness on unknown files, not for a stream whose codec you already know from a previous tune-in. Cache per-channel codec parameters and reuse them.
+- `cache-pause-initial=no`, minimal `demuxer-readahead-secs` for live.
+- Connection reuse to the provider host across channel changes.
+
+Record the p50 after tuning. If it is already near target, the dual-handle work below is optional complexity and should be reconsidered.
+
+### Step 2 — dual handles
 
 Two `mpv_handle` instances, each with its own render context. One is **active** and presenting; one is **warm** and prebuffering a predicted next channel.
 
 Channel change sequence:
 1. User selects a channel.
-2. If the warm handle is already loaded with it → retarget the SwapChainPanel to the warm context, swap roles, unpause. This is the sub-second path.
-3. Otherwise → issue `loadfile` on the warm handle, wait for first video frame, then retarget.
+2. If the warm handle is already loaded with it → present the warm context, swap roles, unpause. This is the sub-second path.
+3. Otherwise → issue `loadfile` on the warm handle, wait for first video frame, then present it.
 4. After every change, issue `loadfile` + `pause` on the now-idle handle for the new prediction.
-
-Prediction v1: next channel in the current sort order. Prediction v2 (optional): most recently watched neighbour.
 
 Both handles need `idle=yes` and `keep-open=yes` so a stream ending doesn't tear down an instance you're about to reuse.
 
-Provider connection limits matter here — two live handles consume two connections. Make prebuffering a setting, default on, and disable it automatically when `max_connections` is 1.
+### Presentation swap mechanics
+
+A `SwapChainPanel` holds one swap chain, so "retarget the panel" is not free — calling `SetSwapChain` mid-playback will show a black frame or a tear, which defeats the point of the whole feature. Pick one:
+
+- **Two stacked `SwapChainPanel`s**, one per handle, swapped by opacity or visibility once the incoming handle reports its first frame. Simplest, costs one extra panel.
+- **One presentation swap chain** that both render contexts blit into, with the compositor choosing the source. Cleaner, more interop work.
+
+Prototype both in the harness and measure the visible transition, not just the time to first frame.
+
+### Prediction
+
+Prediction v1 is **recency and favourites**, not "next channel in sort order". Sequential surfing is a minority of channel changes in practice; most arrive via favourites, number entry, or the EPG. Rank candidates by: last-watched channel (for back-and-forth flipping, the single most common pattern), then most-watched favourites, then sort-order neighbours.
+
+Provider connection limits matter here — two live handles consume two connections, two streams of bandwidth, and two decodes. Make prebuffering a setting, default on, and disable it automatically when `max_connections` is 1.
 
 **Exit criteria**
-- Measured p50 channel change under 800ms and p95 under 2s on a working provider, logged by the harness over 50 changes.
+- Cold-path p50 recorded before and after Step 1 tuning, both logged.
+- Measured p50 channel change under 800ms and p95 under 2s on a working provider, logged by the harness over 50 changes that follow a realistic mix of favourites, number entry, and sequential steps — not 50 sequential steps, which flatters the predictor.
+- No visible black frame or tear during the presentation swap.
 - Prebuffering disabled → app still works correctly, just slower.
 
 ---
 
-## 8. Phase 6 — Failover and health
+## 11. Phase 8 — Failover and health
 
 When a stream fails, try the next candidate for the same `channel_key` before showing any error to the user.
 
 Failure detection:
 - Connection or HTTP error on `loadfile`
-- No first video frame within 6s
-- `core-idle` true with `cache-buffering-state` stalled for more than 8s during playback
+- No first video frame within 4s
+- `core-idle` true with `cache-buffering-state` stalled for more than 5s during playback
 - Decode error events
+
+These thresholds are deliberately tighter than they look. They are additive in the worst case — a slow first attempt followed by a stall means the user has already waited a long time before anything visible happens — so start the failover indicator immediately on detection rather than after the switch succeeds.
 
 Candidate ordering: provider `priority`, then rolling 7-day success rate from `stream_health`, then quality preference (user setting: prefer highest / prefer stable).
 
+### Failover safety guard
+
+Normalization deliberately collapses `US: ESPN` and `UK| ESPN` onto one `channel_key`, which means naive failover can silently play a completely different channel. That is worse than an error, because the user believes what the UI tells them.
+
+A candidate is only eligible when:
+- `channels.country` agrees, or is absent on both sides, **and**
+- the `channel_key` was derived from `tvg_id`, or the candidate's `normalized_title` matches exactly.
+
+Fuzzy-derived keys are good enough for grouping in the UI and not good enough for silently substituting a stream. Candidates failing the guard are excluded and the exclusion is logged.
+
 Show a subtle non-blocking indicator when a failover occurs ("switched to Provider B"). Only surface a hard error after all candidates are exhausted.
 
-Write every attempt to `stream_health`. Surface it in a diagnostics view: per-channel success rate, per-provider reliability, average time-to-first-frame. This data is genuinely useful and nothing on the market has it.
+Write every attempt to `stream_health`, subject to the Phase 1 retention policy. Surface it in a diagnostics view: per-channel success rate, per-provider reliability, average time-to-first-frame. This data is genuinely useful and nothing on the market has it.
 
 **Exit criteria**
 - Killing a stream mid-playback (block the host in the firewall) results in automatic recovery on another provider within 10s.
+- A fixture with two same-named channels from different countries produces no failover between them.
 - Diagnostics view shows accurate per-provider stats after a synthetic run.
 
 ---
 
-## 9. Phase 7 — UI
+## 12. Phase 9 — UI
 
 WinUI 3, MVVM via `CommunityToolkit.Mvvm`. Use `ObservableProperty` and `RelayCommand` source generators.
 
 ### Views
 
 - **Player** — SwapChainPanel, auto-hiding overlay with now/next, transport controls, channel number entry, audio/subtitle track pickers.
-- **Channels** — category sidebar, virtualized channel list with logo, now-playing programme, and progress bar per row.
+- **Channels** — category sidebar, virtualized channel list with logo, now-playing programme, progress bar per row, and an explicit "no guide data" state linking to the EPG mapping UI.
 - **EPG grid** — the hard one, see below.
-- **VOD / Series** — poster grid, detail view with TMDB metadata, season/episode tree.
+- **VOD / Series** — poster grid, detail view with TMDB metadata, season/episode tree, and a continue-watching row driven by `playback_state`.
 - **Search** — unified across channels, VOD, series, programmes.
-- **Providers** — add/edit/test/sync, connection limit display, sync status.
-- **Diagnostics** — stream health, decode info, ingest timings, log viewer.
-- **Settings** — playback profiles, buffering, EPG horizon and offset, prebuffering toggle, theme.
+- **Providers** — add/edit/test/sync, connection limit display, sync status and last sync summary (added / updated / deactivated).
+- **EPG mapping** — unmapped channels, ranked candidates, bulk prefix/suffix rules, coverage figure. Specified in Phase 4.
+- **Diagnostics** — stream health, EPG coverage, decode info (including `hwdec-current` and whether it is a copy path), ingest timings, log viewer.
+- **Settings** — playback profiles, buffering, EPG horizon and per-provider offset, prebuffering toggle, theme.
+
+First run: the app opens with no providers and must say so usefully — an add-provider flow with a Test button that validates credentials, reports `max_connections`, and reports whether an EPG URL was found and how many channels it maps. Test is the user's first impression of whether the app works; make it explain, not just pass or fail.
 
 ### EPG grid requirements
 
@@ -393,29 +653,30 @@ Full keyboard control is a differentiator: arrow navigation, number entry for di
 
 ---
 
-## 10. Phase 8 — Packaging
+## 13. Phase 10 — Packaging
 
 - **Velopack** for installer and delta auto-update. It is the maintained successor to Squirrel and is substantially less friction than MSIX for self-distribution.
-- Code signing certificate is required, not optional. Unsigned installers trigger SmartScreen warnings that will stop most users cold. An OV certificate on a hardware token is the minimum; EV builds reputation faster.
-- Publish self-contained per-RID (`win-x64`, `win-arm64`) with `PublishReadyToRun=true`. Expect roughly 120–180MB installed once libmpv is included.
+- Code signing certificate is required, not optional. Unsigned installers trigger SmartScreen warnings that will stop most users cold. Note that OV and EV code signing certificates both now require hardware or HSM key storage, so a token is a baseline requirement rather than an upgrade; EV builds SmartScreen reputation faster.
+- Publish self-contained per-RID with `PublishReadyToRun=true`. `win-x64` always; `win-arm64` **only if Phase 0.3 found a usable ARM64 libmpv build** — otherwise x64 only, running under emulation on ARM64 devices, and say so on the download page.
+- Expect roughly 120–180MB installed once libmpv is included.
 - Ship an unpackaged build too — HTPC users often want a portable folder.
 
 ---
 
-## 11. Security and privacy
+## 14. Security and privacy
 
 - Provider credentials encrypted at rest with DPAPI (`ProtectedData.Protect`, `DataProtectionScope.CurrentUser`). Never plaintext in the database or settings file.
-- Redact credentials from all logs. Stream URLs contain username and password in the path — write a scrubbing formatter and apply it to Serilog output and to any diagnostics export.
+- Redact credentials from all logs. Stream URLs contain username and password in the path — write a scrubbing formatter and apply it to Serilog output and to any diagnostics export. This includes the synthetic-id hashing in Phase 2: hash the credential-stripped URL, never log the raw one.
 - No telemetry to any server. All health data stays local.
-- TMDB enrichment is opt-in and requires a user-supplied API key.
+- TMDB enrichment is opt-in and requires a user-supplied API key. Display the TMDB attribution their API terms require wherever TMDB metadata is shown.
 
 ---
 
-## 12. Conventions for the coding agent
+## 15. Conventions for the coding agent
 
-Write these into `docs/CLAUDE.md`:
+Write these into `CLAUDE.md` at the repository root — Claude Code reads it from there, not from `docs/`.
 
-- .NET 9, C# 13, nullable enabled, `TreatWarningsAsErrors` on.
+- .NET 9, C# 13, nullable enabled, `TreatWarningsAsErrors` on. Scope it per-project; WinUI 3 generated code will need exclusions and that is expected.
 - `async`/`await` throughout the IO paths; no `.Result` or `.Wait()` anywhere.
 - All long-running operations take a `CancellationToken`.
 - No `System.Text.RegularExpressions` in any parse loop that runs per-line or per-record. Span-based scanning instead.
@@ -426,29 +687,34 @@ Write these into `docs/CLAUDE.md`:
 
 **Standing prohibitions:**
 - Do not add bundled playlists, sample providers, or any content source.
-- Do not use `--wid` for video embedding.
+- Do not use `--wid` for video embedding, including as a temporary workaround.
 - Do not load full XMLTV or VOD JSON payloads into memory.
 - Do not reference UI packages from `Iptv.Core`.
 - Do not touch XAML objects from mpv callback threads.
+- Do not delete user-owned rows (`channels`, `epg_map`, `playback_state`) during a provider sync.
+- Do not write an EPG mapping when the match is ambiguous.
 
 ---
 
-## 13. Suggested build order for Claude Code
+## 16. Suggested build order for Claude Code
 
-1. Solution scaffold, project references, `CLAUDE.md`, CI build.
-2. SQLite schema, migrations, pragmas, FTS5 setup + tests.
-3. Xtream client + M3U parser + `Iptv.Harness` timing output.
-4. Channel identity, normalization, cross-provider merge + tests.
-5. XMLTV pull-parser and ingest pipeline; benchmark to the 8s target.
-6. `Iptv.Mpv` P/Invoke layer; console playback smoke test.
-7. D3D11 render context → SwapChainPanel; verify overlay compositing.
-8. Dual-handle player service and channel-change measurement.
-9. Failover policy and `stream_health` recording.
-10. WinUI shell, navigation, player view.
-11. Channel list and category navigation.
-12. EPG grid with 2D virtualization.
-13. VOD/series browsing, TMDB enrichment.
-14. Search, settings, diagnostics.
-15. Velopack packaging, signing, update channel.
+1. Phase 0 spikes: render API inventory, compositing, ARM64, ingest throughput. Amend this document with the results.
+2. Solution scaffold, project references, `CLAUDE.md`, CI build.
+3. SQLite schema, migrations, pragmas, FTS5 setup + tests.
+4. Xtream client + M3U parser + stable identity + `Iptv.Harness` timing output.
+5. Channel identity, normalization, cross-provider merge, re-sync semantics + tests.
+6. XMLTV pull-parser and ingest pipeline; benchmark to the Phase 3 targets.
+7. EPG channel matching, coverage metric, ambiguity rules.
+8. `Iptv.Mpv` P/Invoke layer; console playback smoke test.
+9. Render context → SwapChainPanel using the Phase 0 path; verify overlay compositing.
+10. **Vertical slice.** One provider, channel list, playback. Use it for a week. Amend the remaining phases.
+11. Cold-path latency tuning, then dual-handle player service and channel-change measurement.
+12. Failover policy, safety guard, and `stream_health` recording.
+13. WinUI shell, navigation, player view, first-run flow.
+14. Channel list and category navigation.
+15. EPG grid with 2D virtualization, EPG mapping UI.
+16. VOD/series browsing, continue-watching, TMDB enrichment.
+17. Search, settings, diagnostics.
+18. Velopack packaging, signing, update channel.
 
-Phases 1–5 are the ones worth doing carefully. If those are right, the UI is ordinary work.
+Phases 0, 4, and 7 are where this project is won or lost. Phase 0 tells you whether the architecture is real, Phase 4 is the difference between a guide and an empty grid, and Phase 7 is the headline feature. If those are right, the UI is ordinary work.
