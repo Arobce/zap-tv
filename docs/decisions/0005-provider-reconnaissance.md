@@ -117,6 +117,46 @@ clear "host unreachable" state rather than a generic sync failure, and must not 
 provider's streams inactive on a DNS failure — that would deactivate an entire catalogue
 because a domain lapsed.
 
-Separately, the dev machine's router DNS fails to resolve most domains. Captures were made
-by pinning the resolved IP per request. Unrelated to the app, but it will affect any
-future capture work on this machine.
+**Correction.** An earlier version of this note claimed the dev machine's DNS was broken
+and that captures required pinning IPs. That was wrong. The canary domain used to test
+resolution (`example.com`) happens to fail on this network, and a dead provider hostname
+failed at the same time; generalising from those two produced a confident conclusion from
+two unlucky data points. The working provider hostname resolves normally from both curl
+and .NET, and a full sync runs end to end with no DNS changes and no pinned IPs.
+
+The lesson worth keeping: test a diagnosis against more than one sample before acting on
+it, especially when the conclusion is "the user's environment is broken".
+
+## Live sync results
+
+Full end-to-end run through the real client, not fixtures.
+
+| Measure | First sync | Second sync |
+| --- | --- | --- |
+| Live streams fetched | 28,285 in 4.5s | 28,285 in 15.9s |
+| Merge | 28,285 added, 0.79s | 0 added, 28,285 updated, 0.77s |
+| Channels after refresh | 20,478 | 20,478 |
+| Distinct channel keys | 21,510 | 21,510 |
+
+The second run is the one that matters: re-syncing identical data adds nothing, deactivates
+nothing, and leaves the channel count unchanged. That is the merge guarantee demonstrated
+against 28,285 real rows rather than fixtures.
+
+Fetch time varies widely between runs (4.5s vs 15.9s) against an identical payload, so it
+is provider-side throughput, not client cost. Worth remembering when Phase 3 measures EPG
+ingest: the download will dominate and must be timed separately from the parse.
+
+### Intra-provider duplication is substantial
+
+28,285 streams collapse to 21,510 distinct `channel_key` values, so roughly 6,800 entries -
+24% - are duplicates *within a single provider*. These are mostly quality variants of one
+channel (HD beside FHD beside SD), which is exactly what normalization is meant to collapse
+while `streams.quality` retains the distinction.
+
+This matters more than it looks. The PRD frames dedup as a cross-provider feature, but a
+quarter of the deduplication value is available with one provider configured. It also means
+the failover candidate list is populated even for a single-provider user, since the
+alternates are the other quality variants of the same channel.
+
+Of the 21,510 keys, 20,478 become channels; the remaining ~1,032 belong solely to separator
+rows, which are stored and shown but never promoted to channels.
