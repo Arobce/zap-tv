@@ -488,3 +488,6 @@ $RECYCLE.BIN/
 logs/
 native/
 BenchmarkDotNet.Artifacts/
+
+# Local provider credentials - never commit
+.local/
