@@ -378,9 +378,11 @@ public static class EpgIngest
             DROP TABLE programmes;
             ALTER TABLE {ProgrammesStaging} RENAME TO programmes;
             CREATE INDEX ix_programmes_lookup ON programmes(epg_channel_id, start_utc, stop_utc);
+            CREATE INDEX ix_programmes_channel ON programmes(epg_channel_id);
 
             DROP TABLE epg_channels;
             ALTER TABLE {ChannelsStaging} RENAME TO epg_channels;
+            CREATE INDEX ix_epg_channels_id_lower ON epg_channels(lower(epg_channel_id));
             """;
 
         await using var transaction = await connection

@@ -386,7 +386,8 @@ This is the phase most likely to be built badly. The requirement is a 120MB XMLT
 
 ### Rules
 
-- `XmlReader` with `Async = true`, `DtdProcessing = DtdProcessing.Prohibit`, `IgnoreWhitespace = true`. Never `XDocument`, `XmlDocument`, or `XmlSerializer` over the whole document.
+- `XmlReader` with `Async = true`, `IgnoreWhitespace = true`. Never `XDocument`, `XmlDocument`, or `XmlSerializer` over the whole document.
+- `DtdProcessing = DtdProcessing.Ignore` with `XmlResolver = null`. **Not `Prohibit`** — this document originally said `Prohibit`, and that was wrong: real XMLTV opens with `<!DOCTYPE tv SYSTEM "xmltv.dtd">`, and `Prohibit` throws on the declaration itself, rejecting essentially every real guide. `Ignore` keeps both properties that mattered — the DTD is skipped rather than processed, so internal entities are never expanded (billion-laughs), and the null resolver means no external subset is ever fetched (XXE).
 - Detect and stream-decompress `.gz` transparently (`GZipStream`), since most EPG URLs serve gzip.
 - Parse XMLTV timestamps (`20260904183000 +0000`) with a hand-written parser. `DateTime.ParseExact` with multiple candidate formats in a hot loop is measurably slow at this volume. Store as unix seconds.
 - Capture every `<channel>` element into `epg_channels`, including **all** `<display-name>` values, not just the first. Phase 4 matching depends on having them, and they are free to collect here.
@@ -403,17 +404,37 @@ XMLTV offsets are frequently wrong or absent. Store UTC, display local, and appl
 
 **Exit criteria**
 - Harness ingests a 100MB+ XMLTV: **parse + insert + swap under 8s**, and **total wall-clock including index build and FTS rebuild under 15s**, with peak working set under 400MB. Report both numbers separately every run; a regression in one is diagnostically different from a regression in the other.
-- If Phase 0.4 established a lower throughput ceiling on the target hardware, these numbers are amended to match it and this line records the change.
+- **Time the download separately from the parse.** Measured against the reference provider, fetching 67.5MB takes 45–51s and varies between runs, while parsing it takes 1.3s. A combined figure measures the provider's upload capacity, not this application.
 - Ingest runs concurrently with reads without blocking a simulated UI query loop (WAL verification).
 - Cancellation mid-ingest leaves the previous EPG intact.
+- An empty but well-formed guide is rejected rather than committed. A provider serving nothing is a provider-side failure, not an instruction to wipe the guide.
+
+**Status: met.** Against the reference provider's real 67.5MB guide — parse + insert + swap **1.3s**, total including index and FTS rebuild **1.6s**, peak working set **202MB**, 168,578 programmes. Roughly 6x inside the parse budget.
 
 ---
 
 ## 7. Phase 4 — EPG channel mapping
 
-The single most common complaint about every IPTV player on the market is an empty guide. It happens because provider `tvg-id` values do not match XMLTV `<channel id>` values — they differ between providers, they differ from the EPG source, and they change without warning. Phase 3 gives you programmes; this phase is what makes them visible.
+The single most common complaint about every IPTV player on the market is an empty guide. Phase 3 gives you programmes; this phase is what makes them visible.
 
 Treat coverage as a headline product metric, not an implementation detail.
+
+### What measurement showed, and how this phase changed because of it
+
+This phase was originally written on the assumption that empty guides are a *matching* problem: that provider `tvg-id` values fail to line up with XMLTV `<channel id>` values, and cleverer matching recovers the difference. Measured against a real provider and its real guide, that is mostly false.
+
+| Measure | Channels | Share |
+| --- | --- | --- |
+| User's channels | 20,478 | 100% |
+| Matched by exact `tvg_id` | 4,871 | 23.8% |
+| Matched **and** the guide has programmes | 3,566 | 17.4% |
+| **Ceiling for any matcher at all** | **3,599** | **17.6%** |
+
+The guide simply does not carry programmes for most channels. Exact id matching already recovers **99.1% of everything achievable**; tiers 2–4 combined are worth at most 33 more channels.
+
+Two consequences. **The bottleneck is guide completeness, not match quality** — no matcher can invent programmes that do not exist, so effort spent on fuzzy matching is effort largely wasted. And **coverage must be reported against what the guide can supply**, not against the whole library, or a correctly working app looks broken.
+
+Build tier 1, the coverage metric, and the manual remap UI first. Tiers 2–4 stay specified because a different provider or a better guide changes the arithmetic entirely, but they are not this phase's centre of gravity and should not be built before the rest of the app works.
 
 ### Matching pipeline
 
@@ -434,9 +455,22 @@ Ambiguity rule: when a channel matches multiple EPG channels at the same tier, r
 - Offer a bulk action for the common case where an entire provider is offset by a naming convention (a shared prefix or suffix).
 - Manual mappings are user data. Include them in settings export and never discard them on provider sync, EPG refresh, or normalization migration.
 
+### Multiple EPG sources
+
+Raising the ceiling needs better data, which needs a source that is not the provider's own thin guide. A library therefore holds **EPG sources independently of providers**: a user can add a third-party XMLTV URL alongside, or instead of, whatever their provider serves.
+
+- An EPG source is a URL plus a refresh interval, owned by the library rather than by a provider. `epg_channels.source_provider_id` already allows for the association; it becomes nullable in practice for user-added sources.
+- Ingest merges sources rather than replacing across them. Two sources may both cover a channel; the mapping keeps the one with more programmes in the visible window, and ties go to the higher-priority source.
+- Per-source coverage is reported, so a user can see that adding a source moved the number and decide whether to keep it.
+
+This is a scope addition made after measurement, not part of the original design. It is here because without it the guide is capped at 17.6% on the reference provider and no amount of matching work changes that.
+
 **Exit criteria**
-- Against a real provider plus its real EPG source, automatic coverage is at least 85%, and the harness prints the figure with a per-tier breakdown.
+- **Recovery against the ceiling**: of the channels the guide can actually serve, at least 95% are matched. Currently 99.1% with tier 1 alone. This replaces the original 85%-of-library target, which is unreachable against a real guide and measured guide completeness rather than the matcher.
+- Coverage is reported both ways — as a fraction of the library and as a fraction of what the guide can supply — because only the second is a statement about this code.
+- **Zero false positives**: no channel is ever shown a guide belonging to a different channel. A wrong guide is worse than a missing one; users trust the grid and will miss the thing they wanted to watch.
 - Zero ambiguous auto-mappings written: a fixture with two channels matching one EPG entry produces no mapping, not an arbitrary one.
+- The grid renders a guide that ends 2–3 days out without looking broken. The reference provider's guide spans 2.6 days, not the 14 the default horizon implies.
 - A locked manual mapping survives an EPG refresh, a provider re-sync, and a normalization version bump.
 
 ---

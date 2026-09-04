@@ -188,6 +188,18 @@ internal static class Program
             Console.WriteLine("  name matching cannot invent programmes the guide does not carry.");
         }
 
+        Console.WriteLine();
+        Console.WriteLine("== matching ==");
+        var match = Stopwatch.StartNew();
+        var report = await EpgMatcher.MatchAsync(connection, cancellationToken).ConfigureAwait(false);
+        match.Stop();
+
+        Console.WriteLine($"  matched            {report.Matched:N0} in {match.ElapsedMilliseconds:N0}ms");
+        Console.WriteLine($"  library coverage   {report.LibraryCoverage:P1}   ({report.Matched:N0} of {report.TotalChannels:N0})");
+        Console.WriteLine($"  ceiling recovery   {report.CeilingRecovery:P1}   ({report.Matched:N0} of {report.Ceiling:N0})   <- the number that judges the matcher");
+
+        var locked = await ScalarAsync(connection, "SELECT count(*) FROM epg_map WHERE locked = 1");
+        Console.WriteLine($"  manual mappings    {locked:N0} (preserved)");
         return 0;
     }
 
