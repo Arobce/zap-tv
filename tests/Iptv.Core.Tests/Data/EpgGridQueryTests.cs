@@ -28,6 +28,7 @@ namespace Iptv.Core.Tests.Data;
 /// timing test still passes. The two tests are not redundant; the plan test is load-bearing.
 /// </para>
 /// </remarks>
+[Collection(PerformanceCollection.Name)]
 public sealed class EpgGridQueryTests
 {
     private const int ChannelCount = 2_000;
