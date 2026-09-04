@@ -150,10 +150,27 @@ public sealed class XmltvReaderTests
     }
 
     [Fact]
-    public async Task Rejects_a_document_type_declaration()
+    public async Task Accepts_a_document_type_declaration()
     {
-        // XXE and billion-laughs. DtdProcessing.Prohibit turns a hostile or accidental
-        // DOCTYPE into a parse failure rather than an expansion.
+        // Real XMLTV opens with <!DOCTYPE tv SYSTEM "xmltv.dtd">; the reference provider's
+        // 70MB guide does. Rejecting the declaration outright would reject nearly every
+        // real guide, so the DTD is ignored rather than prohibited.
+        var declared =
+            """
+            <?xml version="1.0"?>
+            <!DOCTYPE tv SYSTEM "xmltv.dtd">
+            <tv><channel id="a"><display-name>Channel A</display-name></channel></tv>
+            """;
+
+        var (channels, _) = await ReadAsync(Open(declared));
+        Assert.Equal("Channel A", Assert.Single(channels).DisplayNames.Single());
+    }
+
+    [Fact]
+    public async Task Does_not_expand_internal_entities()
+    {
+        // Billion-laughs protection. Ignoring the DTD means the entity is never declared
+        // as far as the reader is concerned, so the reference fails rather than expanding.
         var hostile =
             """
             <?xml version="1.0"?>
@@ -163,6 +180,23 @@ public sealed class XmltvReaderTests
 
         await Assert.ThrowsAnyAsync<System.Xml.XmlException>(
             async () => await ReadAsync(Open(hostile)));
+    }
+
+    [Fact]
+    public async Task Does_not_fetch_an_external_entity()
+    {
+        // XXE. XmlResolver = null means a SYSTEM identifier is never dereferenced, so a
+        // hostile guide cannot read local files or make the app issue requests.
+        var hostile =
+            """
+            <?xml version="1.0"?>
+            <!DOCTYPE tv SYSTEM "http://attacker.invalid/evil.dtd">
+            <tv><channel id="a"><display-name>Safe</display-name></channel></tv>
+            """;
+
+        // Parses fine and simply ignores the external subset rather than fetching it.
+        var (channels, _) = await ReadAsync(Open(hostile));
+        Assert.Equal("Safe", Assert.Single(channels).DisplayNames.Single());
     }
 
     [Fact]

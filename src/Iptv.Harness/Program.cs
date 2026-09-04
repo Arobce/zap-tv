@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using Iptv.Core.Data;
+using Iptv.Core.Epg;
 using Iptv.Core.Sources;
 using Iptv.Core.Xtream;
 
@@ -24,6 +25,7 @@ internal static class Program
             return command switch
             {
                 "sync" => await SyncAsync(CancellationToken.None).ConfigureAwait(false),
+                "epg" => await EpgAsync(args, CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -42,8 +44,151 @@ internal static class Program
     private static int Help()
     {
         Console.WriteLine("Iptv.Harness commands:");
-        Console.WriteLine("  sync    Full live-channel sync against the provider in .local/provider.env");
+        Console.WriteLine("  sync            Full live-channel sync against the configured provider");
+        Console.WriteLine("  epg [file]      Ingest an XMLTV guide; downloads from the provider if no file");
         return 1;
+    }
+
+    /// <summary>
+    /// Ingests a guide and reports the Phase 3 timings.
+    /// </summary>
+    /// <remarks>
+    /// Download and parse are timed separately and deliberately. The reference provider
+    /// takes ~50s to serve its 70MB guide and varies by several-fold between runs, so a
+    /// combined figure would swamp the parse budget in provider-side noise.
+    /// </remarks>
+    private static async Task<int> EpgAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer",
+            "harness.db");
+
+        var factory = new SqliteConnectionFactory(databasePath);
+        await using var connection = await factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+        await Migrator.MigrateAsync(connection, cancellationToken).ConfigureAwait(false);
+
+        Stream guide;
+        long bytes;
+
+        if (args.Length > 1 && File.Exists(args[1]))
+        {
+            bytes = new FileInfo(args[1]).Length;
+            Console.WriteLine($"== source ==\n  file, {bytes / (1024 * 1024.0):F1}MB");
+            guide = File.OpenRead(args[1]);
+        }
+        else
+        {
+            if (LoadCredentials() is not { } credentials)
+            {
+                Console.Error.WriteLine("No .local/provider.env and no file argument.");
+                return 1;
+            }
+
+            using var handler = new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            };
+            using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(10) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("IptvPlayer/0.1");
+
+            var url = new Uri($"{credentials.BaseUrl.ToString().TrimEnd('/')}/xmltv.php" +
+                              $"?username={Uri.EscapeDataString(credentials.Username)}" +
+                              $"&password={Uri.EscapeDataString(credentials.Password)}");
+
+            Console.WriteLine("== download ==");
+            var download = Stopwatch.StartNew();
+            var payload = await http.GetByteArrayAsync(url, cancellationToken).ConfigureAwait(false);
+            download.Stop();
+            bytes = payload.Length;
+            Console.WriteLine($"  {bytes / (1024 * 1024.0):F1}MB in {download.Elapsed.TotalSeconds:F1}s " +
+                              $"({bytes / (1024 * 1024.0) / download.Elapsed.TotalSeconds:F1}MB/s)");
+            guide = new MemoryStream(payload);
+        }
+
+        await using (guide)
+        {
+            var before = GC.GetTotalAllocatedBytes(precise: true);
+
+            Console.WriteLine();
+            Console.WriteLine("== ingest ==");
+            var result = await EpgIngest.IngestAsync(
+                connection, guide, new EpgIngestOptions(), DateTimeOffset.UtcNow, cancellationToken)
+                .ConfigureAwait(false);
+
+            var allocated = (GC.GetTotalAllocatedBytes(precise: true) - before) / (1024 * 1024.0);
+            var peakWorkingSet = Process.GetCurrentProcess().PeakWorkingSet64 / (1024 * 1024.0);
+
+            Console.WriteLine($"  channels         {result.Channels:N0}");
+            Console.WriteLine($"  programmes       {result.Programmes:N0}");
+            Console.WriteLine($"  parse + insert   {result.ParseAndInsert.TotalSeconds:F2}s   (target 8s)");
+            Console.WriteLine($"  total incl. FTS  {result.Total.TotalSeconds:F2}s   (target 15s)");
+            Console.WriteLine($"  allocated        {allocated:F0}MB");
+            Console.WriteLine($"  peak working set {peakWorkingSet:F0}MB   (target under 400MB)");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("== guide quality ==");
+        Console.WriteLine($"  epg channels stored   {await ScalarAsync(connection, "SELECT count(*) FROM epg_channels"):N0}");
+        Console.WriteLine($"  with a usable id      {await ScalarAsync(connection, "SELECT count(*) FROM epg_channels WHERE epg_channel_id <> ''"):N0}");
+        Console.WriteLine($"  with a display name   {await ScalarAsync(connection, "SELECT count(*) FROM epg_channels WHERE display_names <> ''"):N0}");
+        Console.WriteLine($"  channels with a guide {await ScalarAsync(connection, "SELECT count(DISTINCT epg_channel_id) FROM programmes"):N0}");
+        Console.WriteLine($"  programmes with no id {await ScalarAsync(connection, "SELECT count(*) FROM programmes WHERE epg_channel_id = ''"):N0}");
+
+        var first = await ScalarAsync(connection, "SELECT min(start_utc) FROM programmes");
+        var last = await ScalarAsync(connection, "SELECT max(stop_utc) FROM programmes");
+        if (first > 0)
+        {
+            Console.WriteLine($"  guide spans           " +
+                              $"{DateTimeOffset.FromUnixTimeSeconds(first):yyyy-MM-dd HH:mm} to " +
+                              $"{DateTimeOffset.FromUnixTimeSeconds(last):yyyy-MM-dd HH:mm} " +
+                              $"({(last - first) / 86400.0:F1} days)");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("== projected EPG coverage ==");
+
+        // The number Phase 4 lives or dies on: how many of the user's channels can be
+        // matched to a guide entry by exact tvg_id, before any name matching.
+        var byId = await ScalarAsync(
+            connection,
+            """
+            SELECT count(DISTINCT s.channel_key)
+            FROM streams s
+            JOIN epg_channels e ON lower(e.epg_channel_id) = lower(s.tvg_id)
+            WHERE s.is_separator = 0 AND s.tvg_id IS NOT NULL AND s.tvg_id <> '';
+            """);
+
+        // Matching an id is not the same as having a guide. A declared channel with no
+        // programmes matches perfectly and still shows the user an empty row.
+        var withProgrammes = await ScalarAsync(
+            connection,
+            """
+            SELECT count(DISTINCT s.channel_key)
+            FROM streams s
+            JOIN epg_channels e ON lower(e.epg_channel_id) = lower(s.tvg_id)
+            WHERE s.is_separator = 0 AND s.tvg_id IS NOT NULL AND s.tvg_id <> ''
+              AND EXISTS (SELECT 1 FROM programmes p WHERE p.epg_channel_id = e.epg_channel_id);
+            """);
+
+        // The ceiling no amount of matching can exceed: the guide only carries programmes
+        // for so many channels.
+        var guideChannels = await ScalarAsync(
+            connection, "SELECT count(DISTINCT epg_channel_id) FROM programmes");
+
+        var channels = await ScalarAsync(connection, "SELECT count(*) FROM channels");
+        if (channels > 0)
+        {
+            Console.WriteLine($"  user channels         {channels:N0}");
+            Console.WriteLine($"  id match              {byId:N0} ({byId / (double)channels:P1})");
+            Console.WriteLine($"  id match with a guide {withProgrammes:N0} ({withProgrammes / (double)channels:P1})");
+            Console.WriteLine($"  CEILING, any matcher  {guideChannels:N0} ({guideChannels / (double)channels:P1})");
+            Console.WriteLine();
+            Console.WriteLine("  The ceiling is set by guide completeness, not match quality:");
+            Console.WriteLine("  name matching cannot invent programmes the guide does not carry.");
+        }
+
+        return 0;
     }
 
     private static async Task<int> SyncAsync(CancellationToken cancellationToken)

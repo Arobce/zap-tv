@@ -42,7 +42,20 @@ public static class XmltvReader
         var settings = new XmlReaderSettings
         {
             Async = true,
-            DtdProcessing = DtdProcessing.Prohibit,
+
+            // Ignore, not Prohibit. The PRD specified Prohibit, but real XMLTV files
+            // routinely open with <!DOCTYPE tv SYSTEM "xmltv.dtd"> - the reference
+            // provider's 70MB guide does - and Prohibit throws on the declaration itself,
+            // which would reject nearly every real guide in existence.
+            //
+            // Ignore keeps the security property that mattered. The DTD is skipped rather
+            // than processed, so internal entity definitions are never expanded
+            // (billion-laughs) and an entity reference relying on them fails loudly.
+            // XmlResolver = null additionally prevents any attempt to fetch the external
+            // subset, so a hostile SYSTEM identifier cannot be dereferenced (XXE).
+            DtdProcessing = DtdProcessing.Ignore,
+            XmlResolver = null,
+
             IgnoreWhitespace = true,
             IgnoreComments = true,
             IgnoreProcessingInstructions = true,

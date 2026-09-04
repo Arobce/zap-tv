@@ -54,13 +54,21 @@ send `""` rather than `null`. Both mean "no EPG id", which is exactly why the st
 converter normalizes empty to null — otherwise 307 channels would carry an EPG id that
 matches nothing and would be counted as covered.
 
+> **⚠ The conclusion drawn below was wrong. See [decision 0006](0006-epg-coverage-ceiling.md).**
+>
+> This section reasoned from the provider's catalogue alone, without the guide. The
+> channels lacking a `tvg_id` are overwhelmingly the same channels the guide carries no
+> data for, so matching them by name cannot help. Exact id matching already recovers 99.1%
+> of what any matcher could achieve. The numbers below are accurate; the inference from
+> them is not.
+
 This inverts the Phase 4 design assumption. Tier 1 (exact `tvg_id` match) has a hard
 ceiling of 28% coverage on this provider. Name-based matching is not a fallback — it is
 the primary mechanism for roughly seven channels in ten.
 
 Consequences:
 
-- The Phase 4 exit criterion of 85% automatic coverage cannot be met by `tvg_id` matching
+- SUPERSEDED by decision 0006: see the coverage ceiling. The Phase 4 exit criterion of 85% cannot be met by any matcher
   and depends almost entirely on tiers 2-4 and on the quality of the EPG source's
   `display-name` values. Treat 85% as unvalidated until measured against a real XMLTV.
 - `channel_key` will take the `name:` form for ~72% of channels, which makes normalization
