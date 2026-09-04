@@ -83,10 +83,24 @@ There is no single rule to apply globally.
 (`VIP - NO EVENT`). These are not channels; they are visual dividers in the provider's
 category listing.
 
-Not currently handled anywhere in the PRD. They should be detected and hidden by default,
-because they will otherwise pollute search, the EPG grid, dedup, and the coverage metric
-in finding 2. Suggested rule: an entry whose normalized title is empty, or which has no
-resolvable stream, is not a channel.
+Not currently handled anywhere in the PRD.
+
+**Decision: keep them visible, but classify them.** They are the provider's own section
+headings, and hiding them flattens a grouping the user finds useful. Suppressing them
+would be discarding information the provider deliberately encoded.
+
+They are not channels, though, so they are marked `is_separator` at ingest and excluded
+from search results, cross-provider dedup, failover candidacy, and the EPG coverage
+denominator. Without that exclusion, 1,094 non-channels would depress the Phase 4 coverage
+figure and offer themselves as failover targets that can never play.
+
+Detection is structural rather than a keyword list: a run of three or more identical
+punctuation or symbol characters (`#####`, `---`, `===`, `***`, `▬▬▬`) marks a decorative
+row. Keyword matching would need a per-provider vocabulary and would misfire on real
+channels.
+
+Note that `VIP - NO EVENT` placeholders are a different case: they are real streams that
+are idle between events, not decorative rows, and are left alone.
 
 ## Environment note
 
