@@ -1,0 +1,61 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>Iptv.Core</RootNamespace>
+    <!--
+      Iptv.Core is deliberately platform-agnostic and UI-free. It must stay buildable
+      without the Windows App SDK so that ingest, parsing and matching logic can be
+      tested on any machine and in CI without a WinUI workload.
+    -->
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Data.Sqlite" />
+    <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+  </ItemGroup>
+
+  <!--
+    PRD Phase 2 / standing prohibitions: Iptv.Core must never reference UI packages.
+    Core notifies the UI through IAsyncEnumerable<T>, Channel<T> or plain events; if a
+    DispatcherQueue is needed to make something work, the abstraction is wrong.
+
+    This target fails the build rather than relying on review to catch it.
+  -->
+  <Target Name="AssertNoUiDependencies" BeforeTargets="Build">
+
+    <ItemGroup>
+      <_ForbiddenUiPackage Include="Microsoft.WindowsAppSDK" />
+      <_ForbiddenUiPackage Include="Microsoft.UI.Xaml" />
+      <_ForbiddenUiPackage Include="Microsoft.Windows.SDK" />
+      <_ForbiddenUiPackage Include="CommunityToolkit.Mvvm" />
+      <_ForbiddenUiPackage Include="CommunityToolkit.WinUI" />
+      <_ForbiddenUiPackage Include="System.Windows" />
+      <_ForbiddenUiPackage Include="WinRT" />
+    </ItemGroup>
+
+    <!--
+      Flattened to a single string so the Error below can batch over one item list.
+      MSBuild cannot batch two item lists against each other in a condition, and an
+      attempt to do so fails silently, which is worse than no check at all.
+    -->
+    <PropertyGroup>
+      <_PackageRefList>;@(PackageReference->'%(Identity)', ';');</_PackageRefList>
+      <_ProjectRefList>;@(ProjectReference->'%(Filename)', ';');</_ProjectRefList>
+    </PropertyGroup>
+
+    <Error Condition="$(_PackageRefList.Contains('%(_ForbiddenUiPackage.Identity)'))" Code="IPTV0001" Text="Iptv.Core must not reference UI packages, but references '%(_ForbiddenUiPackage.Identity)'. Core stays UI-free by design - expose IAsyncEnumerable&lt;T&gt;, Channel&lt;T&gt; or events instead. See the standing prohibitions in the PRD." />
+
+    <!--
+      Backstop only. Iptv.Mpv and Iptv.App both target -windows, so NuGet already
+      rejects a reference from platform-neutral Core with NU1201 during restore,
+      before this target runs. This catches the case where a future UI-adjacent
+      project happens to be platform-neutral and slips past that check.
+    -->
+    <Error Condition="$(_ProjectRefList.Contains(';Iptv.App;')) Or $(_ProjectRefList.Contains(';Iptv.Mpv;'))" Code="IPTV0003" Text="Iptv.Core must not reference Iptv.App or Iptv.Mpv. Dependencies point inward toward Core, never outward." />
+
+    <Error Condition="'$(TargetFramework)' != '' And $(TargetFramework.Contains('-windows'))" Code="IPTV0002" Text="Iptv.Core must target a platform-neutral TFM so it builds and tests without a Windows workload, but targets '$(TargetFramework)'. Platform-specific code belongs in Iptv.Mpv or Iptv.App." />
+
+  </Target>
+
+</Project>

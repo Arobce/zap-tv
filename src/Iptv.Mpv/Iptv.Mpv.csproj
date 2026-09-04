@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Windows-specific: P/Invoke into libmpv, the render context, and GPU interop.
+      The presentation backend is decided by the Phase 0.1 spike; keep everything
+      behind IVideoPresenter so it stays swappable.
+    -->
+    <TargetFramework>net10.0-windows</TargetFramework>
+    <RootNamespace>Iptv.Mpv</RootNamespace>
+    <!-- LibraryImport source generators require unsafe for some marshalling shapes. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+</Project>

@@ -2,7 +2,7 @@
 
 **Target agent:** Claude Code
 **Platform:** Windows 10 1809+ / Windows 11, x64 (ARM64 pending Phase 0 spike)
-**Stack:** .NET 9, C#, WinUI 3 (Windows App SDK), libmpv render API, SQLite + FTS5
+**Stack:** .NET 10 (LTS), C#, WinUI 3 (Windows App SDK), libmpv render API, SQLite + FTS5
 
 ---
 
@@ -45,10 +45,10 @@ Resume position for VOD and series ("continue watching") is **in scope** — it 
 ## 2. Solution structure
 
 ```
-Iptv.sln
+Iptv.slnx
   CLAUDE.md               <- repo root, not docs/. Claude Code reads it from here.
   src/
-    Iptv.Core/            net9.0 — no UI package references, ever
+    Iptv.Core/            net10.0 — no UI package references, ever
       Xtream/             player_api.php client + DTOs
       Playlists/          M3U/M3U8 streaming parser
       Epg/                XMLTV pull-parser, ingest pipeline, channel matching
@@ -56,7 +56,7 @@ Iptv.sln
       Sources/            provider merge, channel identity, failover policy
       Metadata/           TMDB enrichment (optional feature)
       Models/             domain records
-    Iptv.Mpv/             net9.0-windows — P/Invoke, render context, GPU interop
+    Iptv.Mpv/             net10.0-windows — P/Invoke, render context, GPU interop
     Iptv.App/             WinUI 3, MVVM, packaged
     Iptv.Harness/         console app for timing ingest and playback smoke tests
   tests/
@@ -79,6 +79,12 @@ Iptv.sln
 - `Velopack` (packaging/update, Phase 10)
 
 Use raw ADO.NET via `Microsoft.Data.Sqlite` for the bulk ingest path. EF Core is acceptable for CRUD on settings and providers but must not be used for programme inserts.
+
+Package versions are centrally managed in `Directory.Packages.props`; projects reference by name only.
+
+### Why .NET 10 and not .NET 9
+
+This document originally specified .NET 9. .NET 9 is an STS release whose support ended in May 2026, so it is not a defensible target for a greenfield app being started now. .NET 10 is the current LTS with support into November 2028, and the language and runtime differences are immaterial to anything in this document.
 
 ---
 
@@ -676,7 +682,7 @@ Full keyboard control is a differentiator: arrow navigation, number entry for di
 
 Write these into `CLAUDE.md` at the repository root — Claude Code reads it from there, not from `docs/`.
 
-- .NET 9, C# 13, nullable enabled, `TreatWarningsAsErrors` on. Scope it per-project; WinUI 3 generated code will need exclusions and that is expected.
+- .NET 10, latest C#, nullable enabled, `TreatWarningsAsErrors` on. Scope it per-project; WinUI 3 generated code will need exclusions and that is expected.
 - `async`/`await` throughout the IO paths; no `.Result` or `.Wait()` anywhere.
 - All long-running operations take a `CancellationToken`.
 - No `System.Text.RegularExpressions` in any parse loop that runs per-line or per-record. Span-based scanning instead.
