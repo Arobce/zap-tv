@@ -43,6 +43,70 @@ public sealed class MpvHandle : IDisposable
     public bool IsDisposed => _handle == IntPtr.Zero;
 
     /// <summary>
+    /// The native context, for the render API.
+    /// </summary>
+    /// <remarks>
+    /// Exposed only so a render context can be created against this handle. The render
+    /// context must be freed before the handle, which is why both live in this assembly
+    /// rather than the pointer being handed to callers.
+    /// </remarks>
+    internal IntPtr RawHandle
+    {
+        get
+        {
+            ObjectDisposedException.ThrowIf(IsDisposed, this);
+            return _handle;
+        }
+    }
+
+    /// <summary>
+    /// Issues a command as a NULL-terminated argument vector.
+    /// </summary>
+    /// <remarks>
+    /// The string form (<c>mpv_command_string</c>) splits on whitespace, which corrupts
+    /// any argument containing a space - and every stream URL here carries a
+    /// provider-supplied path. The vector form has no such ambiguity.
+    /// </remarks>
+    public void Command(params string[] arguments)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        ArgumentNullException.ThrowIfNull(arguments);
+
+        var pointers = new IntPtr[arguments.Length + 1];
+        try
+        {
+            for (var i = 0; i < arguments.Length; i++)
+            {
+                pointers[i] = Marshal.StringToCoTaskMemUTF8(arguments[i]);
+            }
+
+            pointers[^1] = IntPtr.Zero;
+
+            var handle = GCHandle.Alloc(pointers, GCHandleType.Pinned);
+            try
+            {
+                Check(
+                    MpvInterop.mpv_command(_handle, handle.AddrOfPinnedObject()),
+                    $"mpv_command({arguments[0]})");
+            }
+            finally
+            {
+                handle.Free();
+            }
+        }
+        finally
+        {
+            foreach (var pointer in pointers)
+            {
+                if (pointer != IntPtr.Zero)
+                {
+                    Marshal.FreeCoTaskMem(pointer);
+                }
+            }
+        }
+    }
+
+    /// <summary>
     /// Creates a handle and applies options, then initialises it.
     /// </summary>
     /// <remarks>
