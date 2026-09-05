@@ -3,13 +3,37 @@
   <PropertyGroup>
     <!--
       Windows-specific: P/Invoke into libmpv, the render context, and GPU interop.
-      The presentation backend is decided by the Phase 0.1 spike; keep everything
-      behind IVideoPresenter so it stays swappable.
+      Spike 0.1 established that the render API offers only "opengl" and "sw"; everything
+      here is built behind IVideoPresenter so the backend stays swappable.
     -->
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>Iptv.Mpv</RootNamespace>
-    <!-- LibraryImport source generators require unsafe for some marshalling shapes. -->
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
+
+  <!--
+    libmpv-2.dll is 120MB and is not committed. It is fetched into .local/native by the
+    Phase 0 setup and copied to the output directory here so the harness and tests can
+    load it. Override LibMpvPath to point elsewhere.
+  -->
+  <PropertyGroup>
+    <LibMpvPath Condition="'$(LibMpvPath)' == ''">$(MSBuildThisFileDirectory)..\..\.local\native\mpv\libmpv-2.dll</LibMpvPath>
+  </PropertyGroup>
+
+  <ItemGroup Condition="Exists('$(LibMpvPath)')">
+    <None Include="$(LibMpvPath)">
+      <Link>libmpv-2.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
+  <!--
+    A warning rather than an error: Iptv.Core and its tests must stay buildable on a
+    machine with no native binaries, and CI builds this project without them.
+  -->
+  <Target Name="WarnIfLibMpvMissing" BeforeTargets="Build" Condition="!Exists('$(LibMpvPath)')">
+    <Warning Code="IPTV0100"
+             Text="libmpv-2.dll not found at '$(LibMpvPath)'. Playback code will build but cannot run. See docs/decisions/0001-libmpv-render-api.md." />
+  </Target>
 
 </Project>
