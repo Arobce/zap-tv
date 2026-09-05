@@ -1,6 +1,8 @@
 using System.Diagnostics;
 using Iptv.Core.Data;
 using Iptv.Core.Epg;
+using Iptv.Mpv;
+using Iptv.Mpv.Native;
 using Iptv.Core.Sources;
 using Iptv.Core.Xtream;
 
@@ -26,6 +28,7 @@ internal static class Program
             {
                 "sync" => await SyncAsync(CancellationToken.None).ConfigureAwait(false),
                 "epg" => await EpgAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "play" => await PlayAsync(args, CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -46,7 +49,246 @@ internal static class Program
         Console.WriteLine("Iptv.Harness commands:");
         Console.WriteLine("  sync            Full live-channel sync against the configured provider");
         Console.WriteLine("  epg [file]      Ingest an XMLTV guide; downloads from the provider if no file");
+        Console.WriteLine("  play [search]   Play a real stream and report decode diagnostics");
         return 1;
+    }
+
+    /// <summary>
+    /// Plays a real stream from the library and reports the Phase 5 decode diagnostics.
+    /// </summary>
+    /// <remarks>
+    /// The exit criterion this exists for is <c>hwdec-current</c> against real MPEG-TS.
+    /// The lavfi test pattern used elsewhere is generated rather than decoded, so it
+    /// cannot answer whether hardware decoding actually engages.
+    /// <para>
+    /// Opens exactly one stream. The reference account permits a single connection, and
+    /// exceeding it gets the account temporarily blocked - which the user would blame on
+    /// this application.
+    /// </para>
+    /// </remarks>
+    private static async Task<int> PlayAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var search = args.Length > 1 ? args[1] : null;
+
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer",
+            "harness.db");
+
+        var factory = new SqliteConnectionFactory(databasePath);
+        await using var connection = await factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var (title, url) = await FindStreamAsync(connection, search, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (url is null)
+        {
+            Console.Error.WriteLine(
+                search is null
+                    ? "No streams in the library. Run 'sync' first."
+                    : $"No active stream matching '{search}'.");
+            return 1;
+        }
+
+        Console.WriteLine("== stream ==");
+        Console.WriteLine($"  {title}");
+        Console.WriteLine($"  {CredentialScrubber.Scrub(url)}");
+        Console.WriteLine();
+
+        if (!MpvLibrary.IsAvailable())
+        {
+            Console.Error.WriteLine("libmpv-2.dll not found; cannot play.");
+            return 1;
+        }
+
+        return await PlayOnGlThreadAsync(title!, url).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// Runs playback on a dedicated thread holding the GL context.
+    /// </summary>
+    /// <remarks>
+    /// A WGL context belongs to one thread, and mpv's render calls must run on whichever
+    /// thread holds it.
+    /// </remarks>
+    private static Task<int> PlayOnGlThreadAsync(string title, string url)
+    {
+        var completion = new TaskCompletionSource<int>();
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                completion.SetResult(Play(title, url));
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine($"Playback failed: {CredentialScrubber.Scrub(exception.Message)}");
+                completion.SetResult(4);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task;
+    }
+
+    private static int Play(string title, string url)
+    {
+        using var glContext = WglContext.Create();
+        glContext.MakeCurrent();
+
+        var capabilities = glContext.Query();
+        Console.WriteLine("== gpu ==");
+        Console.WriteLine($"  renderer         {capabilities.Renderer}");
+        Console.WriteLine($"  opengl           {capabilities.Version}");
+        Console.WriteLine($"  hardware path    {capabilities.SupportsHardwarePath}");
+        Console.WriteLine();
+
+        // The PRD's live profile. Applied before initialise because vo cannot change after.
+        using var handle = MpvHandle.Create(new Dictionary<string, string>
+        {
+            ["vo"] = "libmpv",
+            ["idle"] = "yes",
+            ["keep-open"] = "yes",
+            ["audio"] = "no",
+            ["hwdec"] = "auto-safe",
+            ["profile"] = "low-latency",
+            ["cache"] = "yes",
+            ["demuxer-lavf-o"] = "reconnect=1,reconnect_streamed=1,reconnect_delay_max=2",
+            ["demuxer-max-bytes"] = "32MiB",
+            ["demuxer-readahead-secs"] = "2",
+            ["deinterlace"] = "auto",
+        });
+
+        using var renderer = MpvOpenGlRenderer.Create(handle);
+        using var target = SharedVideoTarget.Create(1280, 720);
+        using var events = new MpvEventLoop(handle);
+
+        handle.RequestLogMessages("warn");
+        foreach (var property in new[] { "hwdec-current", "video-params/w", "video-params/h", "core-idle" })
+        {
+            events.ObserveProperty(property, MpvFormat.String);
+        }
+
+        events.Start();
+
+        Console.WriteLine("== playback ==");
+        var stopwatch = Stopwatch.StartNew();
+        handle.Command("loadfile", url);
+
+        long? firstFrameMs = null;
+        var frames = 0;
+        var warnings = 0;
+
+        while (stopwatch.Elapsed < TimeSpan.FromSeconds(30))
+        {
+            while (events.Events.TryRead(out var evt))
+            {
+                switch (evt)
+                {
+                    case MpvLogMessage log when warnings < 8:
+                        Console.WriteLine($"  [{log.Level}] {CredentialScrubber.Scrub(log.Text)}");
+                        warnings++;
+                        break;
+
+                    case MpvEndFile end:
+                        Console.WriteLine($"  end-file reason={end.Reason} error={end.Error}");
+                        if (end.Reason == 4)
+                        {
+                            Console.Error.WriteLine("  stream failed to open");
+                            return 3;
+                        }
+
+                        break;
+
+                    default:
+                        break;
+                }
+            }
+
+            if (renderer.HasFrameReady())
+            {
+                target.RenderFrame(renderer);
+                frames++;
+                firstFrameMs ??= stopwatch.ElapsedMilliseconds;
+
+                // Ten seconds of real playback is enough to show sustained decode without
+                // holding the account's only connection any longer than necessary.
+                if (frames > 300)
+                {
+                    break;
+                }
+            }
+            else
+            {
+                Thread.Sleep(2);
+            }
+        }
+
+        stopwatch.Stop();
+
+        Console.WriteLine();
+        Console.WriteLine("== result ==");
+        Console.WriteLine($"  time to first frame  {firstFrameMs?.ToString() ?? "never"} ms");
+        Console.WriteLine($"  frames rendered      {frames:N0} in {stopwatch.ElapsedMilliseconds:N0}ms");
+
+        var hwdec = handle.GetProperty("hwdec-current");
+        var width = handle.GetProperty("video-params/w");
+        var height = handle.GetProperty("video-params/h");
+        var codec = handle.GetProperty("video-codec");
+
+        Console.WriteLine($"  resolution           {width ?? "?"}x{height ?? "?"}");
+        Console.WriteLine($"  codec                {codec ?? "?"}");
+        Console.WriteLine($"  hwdec-current        {hwdec ?? "(none)"}");
+
+        // Anything other than absent or "no" is a hardware decoder. Matching on "d3d11"
+        // alone was wrong: with hwdec=auto-safe, mpv picks the best backend for the
+        // adapter, and on NVIDIA that is nvdec rather than d3d11va. Reporting working
+        // hardware decode as software would have sent someone chasing a non-problem.
+        var hardware = !string.IsNullOrWhiteSpace(hwdec) &&
+                       !hwdec.Equals("no", StringComparison.OrdinalIgnoreCase);
+
+        var copyBack = hardware && hwdec!.EndsWith("-copy", StringComparison.OrdinalIgnoreCase);
+
+        Console.WriteLine(
+            hardware
+                ? $"  DECODE               hardware via {hwdec}" +
+                  (copyBack ? " (copy-back: frames cross system memory)" : " (zero-copy)")
+                : "  DECODE               SOFTWARE - this presents to users as 'the app is slow'");
+
+        WglContext.ClearCurrent();
+        return frames > 0 ? 0 : 3;
+    }
+
+    /// <summary>Finds an active, non-separator live stream to play.</summary>
+    private static async Task<(string? Title, string? Url)> FindStreamAsync(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        string? search,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT title, url FROM streams
+            WHERE kind = 'live' AND is_active = 1 AND is_separator = 0
+              AND (@search IS NULL OR title LIKE '%' || @search || '%')
+            ORDER BY
+              -- Prefer a channel with guide data: it is more likely to be a real,
+              -- working channel than an unmapped filler entry.
+              (SELECT count(*) FROM epg_map m WHERE m.channel_key = streams.channel_key) DESC,
+              length(title)
+            LIMIT 1;
+            """;
+        command.Parameters.AddWithValue("@search", (object?)search ?? DBNull.Value);
+
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        if (!await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            return (null, null);
+        }
+
+        return (reader.GetString(0), reader.GetString(1));
     }
 
     /// <summary>

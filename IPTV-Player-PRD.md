@@ -540,7 +540,13 @@ deinterlace=auto
 
 Apply a different option set for VOD — large readahead, no low-latency profile, seeking enabled. Switching profiles per content kind is a real quality difference.
 
-After the first frame, read `hwdec-current` and log it. Accept `d3d11va` **or** `d3d11va-copy` as hardware decoding; `auto-safe` frequently resolves to the copy variant and that is not a failure. Anything else means software decode, which on 1080i presents to users as "the app is slow" — surface it in Diagnostics rather than letting it pass silently.
+After the first frame, read `hwdec-current` and log it.
+
+**Treat any value other than absent or `no` as hardware decoding.** An earlier version of this document said to accept `d3d11va` or `d3d11va-copy` specifically. That is too narrow and was wrong in practice: with `hwdec=auto-safe`, mpv picks the best backend for the adapter, and on an NVIDIA card that is **`nvdec`**, not `d3d11va`. Measured against a real stream, matching on `d3d11` alone reported working hardware decode as software — which would have sent someone optimising a non-problem. Expect `nvdec`, `cuda`, `d3d11va`, `dxva2`, `vulkan` and their `-copy` variants.
+
+A `-copy` suffix still means hardware decode, but frames cross system memory on the way back. Worth showing in Diagnostics, not worth failing over.
+
+Software decode on 1080i presents to users as "the app is slow" — surface it rather than letting it pass silently. This is not hypothetical: across five identical runs against the same stream, four reported `nvdec` and one reported `no`. Hardware decode is **not deterministic**, so the app must show the live value rather than assume the answer it got at startup still holds.
 
 ### Property observation
 
@@ -549,7 +555,7 @@ Observe at minimum: `pause`, `time-pos`, `duration`, `demuxer-cache-time`, `cach
 **Exit criteria**
 - Harness plays a raw MPEG-TS live stream and an MP4 VOD file in the same session.
 - Video composites correctly under a semi-transparent XAML overlay.
-- `hwdec-current` resolves to `d3d11va` or `d3d11va-copy` on Intel, NVIDIA, and AMD test machines, and which one is logged per machine.
+- `hwdec-current` resolves to a hardware decoder — anything other than absent or `no` — on Intel, NVIDIA, and AMD test machines, and which one is logged per machine. **Partially met:** verified on NVIDIA (RTX 5080, `nvdec`, 4 runs of 5). Intel and AMD remain untested, as does the software fallback on a machine with no usable driver.
 - No crash after 200 sequential `loadfile` calls (leak check on render context lifetime).
 
 ---
