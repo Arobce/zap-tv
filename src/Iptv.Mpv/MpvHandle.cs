@@ -187,6 +187,35 @@ public sealed class MpvHandle : IDisposable
         Check(MpvInterop.mpv_request_log_messages(_handle, minimumLevel), "mpv_request_log_messages");
     }
 
+    /// <summary>Asks mpv to raise an event whenever a property changes.</summary>
+    public void ObserveProperty(string name, MpvFormat format)
+    {
+        ObjectDisposedException.ThrowIf(IsDisposed, this);
+        Check(
+            MpvInterop.mpv_observe_property(_handle, 0, name, (int)format),
+            $"mpv_observe_property({name})");
+    }
+
+    /// <summary>
+    /// Blocks until an event arrives or the timeout elapses.
+    /// </summary>
+    /// <remarks>
+    /// Internal because the returned pointer is only valid until the next call on this
+    /// handle. <see cref="MpvEventLoop"/> copies everything out before publishing; letting
+    /// callers hold the pointer would be a use-after-free waiting to happen.
+    /// </remarks>
+    internal IntPtr WaitEvent(double timeoutSeconds)
+        => IsDisposed ? IntPtr.Zero : MpvInterop.mpv_wait_event(_handle, timeoutSeconds);
+
+    /// <summary>Interrupts a blocked <see cref="WaitEvent"/>.</summary>
+    internal void Wakeup()
+    {
+        if (!IsDisposed)
+        {
+            MpvInterop.mpv_wakeup(_handle);
+        }
+    }
+
     public void Dispose()
     {
         var handle = Interlocked.Exchange(ref _handle, IntPtr.Zero);
