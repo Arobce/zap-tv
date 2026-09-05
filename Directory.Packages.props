@@ -16,6 +16,11 @@
     <PackageVersion Include="SQLitePCLRaw.bundle_e_sqlite3" Version="3.0.2" />
   </ItemGroup>
 
+  <ItemGroup Label="Graphics">
+    <!-- D3D11 and DXGI bindings for the WGL_NV_DX_interop2 presentation path (decision 0002). -->
+    <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
+  </ItemGroup>
+
   <ItemGroup Label="Logging">
     <PackageVersion Include="Serilog" Version="4.3.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />

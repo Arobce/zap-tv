@@ -27,13 +27,16 @@
     </None>
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Vortice.Direct3D11" />
+  </ItemGroup>
+
   <!--
     A warning rather than an error: Iptv.Core and its tests must stay buildable on a
     machine with no native binaries, and CI builds this project without them.
   -->
   <Target Name="WarnIfLibMpvMissing" BeforeTargets="Build" Condition="!Exists('$(LibMpvPath)')">
-    <Warning Code="IPTV0100"
-             Text="libmpv-2.dll not found at '$(LibMpvPath)'. Playback code will build but cannot run. See docs/decisions/0001-libmpv-render-api.md." />
+    <Warning Code="IPTV0100" Text="libmpv-2.dll not found at '$(LibMpvPath)'. Playback code will build but cannot run. See docs/decisions/0001-libmpv-render-api.md." />
   </Target>
 
 </Project>
