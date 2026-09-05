@@ -1,6 +1,6 @@
 # 0.2a — How to obtain a GL context for the render API
 
-**Status:** Open — needs a decision before the compositing spike can be finished.
+**Status:** Decided and validated — **A with C as fallback**. GL rendering proven end to end; texture sharing into a `SwapChainPanel` remains.
 **Date:** 2026-09-05
 
 ## What is already settled
@@ -87,3 +87,56 @@ excluded for a reason that has not changed: the video HWND renders above all XAM
 every overlay, the EPG panel and every context menu would be unable to draw over video.
 The prohibition matters most at exactly this moment, when the sanctioned paths are
 turning out to be work.
+
+---
+
+## Outcome
+
+**A was built and works. No ANGLE, no redistributable.**
+
+A WGL context is created on a hidden window, mpv accepts it through
+`MPV_RENDER_API_TYPE_OPENGL`, and rendering runs sustained.
+
+| Measure | Result |
+| --- | --- |
+| Driver reported | NVIDIA RTX 5080, OpenGL 4.6.0, driver 610.74 |
+| `WGL_NV_DX_interop2` | Present |
+| mpv accepting a WGL context | Yes |
+| First GL frame | 186ms after `loadfile` |
+| Sustained rendering | 100 frames in 1656ms (~60fps, the source rate) |
+| 25 create/free cycles | Clean |
+
+Sustained rendering matters more than the first frame. A single frame can succeed while
+the `get_proc_address` delegate is collected moments later; mpv holds that pointer for the
+life of the context and calls it during rendering, so a crash from a collected delegate
+appears at a random later frame rather than at the mistake. Rendering a hundred frames is
+what shows the callback lifetime is right.
+
+Two details that would each have produced a confusing failure:
+
+- **`wglGetProcAddress` returns null for core GL 1.1 functions**, which live as ordinary
+  exports in `opengl32.dll`. A resolver asking only WGL hands mpv a null pointer for
+  functions that plainly exist. mpv's own header warns about this; the resolver tries both.
+- **Some drivers return 1, 2, 3 or -1** rather than null for an unsupported entry point.
+  Treating those as valid means calling into address `0x1`.
+
+## What remains
+
+Rendering into FBO 0 of a hidden window proves the pipeline. It does not put pixels on
+screen. Still to do:
+
+1. Share a D3D11 texture into GL via `WGL_NV_DX_interop2`, render mpv into it.
+2. Present that texture through `SwapChainPanel` with `ISwapChainPanelNative.SetSwapChain`.
+3. Confirm a semi-transparent XAML overlay composites above it — the actual point of the
+   whole exercise, and the thing `--wid` cannot do.
+
+The risky unknowns are now behind us: libmpv loads, the render API interop is correct, and
+the driver supports the extension the design depends on. What is left is assembly work
+against APIs that are known to exist.
+
+## Caveat on the measurement
+
+One machine, and a high-end NVIDIA GPU. `SupportsHardwarePath` returning true here says
+nothing about Intel integrated graphics, AMD, or a driverless VM. The fallback to software
+rendering is therefore not optional polish — it is the path for every machine this one does
+not represent, and it needs testing on hardware that actually fails the check.
