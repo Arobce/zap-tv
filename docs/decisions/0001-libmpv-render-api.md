@@ -37,10 +37,16 @@ was already built.
 
 The presentation path is therefore:
 
-- **Primary: OpenGL render API over ANGLE.** `mpv_render_context_create` with
-  `MPV_RENDER_API_TYPE_OPENGL` and an ANGLE EGL context whose backing device is D3D11,
-  rendering into a texture shared with a `SwapChainPanel`. ANGLE ships with the Windows
-  App SDK, so this adds no new redistributable.
+- **Primary: OpenGL render API.** `mpv_render_context_create` with
+  `MPV_RENDER_API_TYPE_OPENGL`, rendering into a texture shared with a `SwapChainPanel`.
+  **How the GL context is obtained is a separate decision — see
+  [0002](0002-video-presentation-path.md).**
+
+  > **Correction.** This document originally stated that "ANGLE ships with the Windows App
+  > SDK, so this adds no new redistributable". That is false. All twelve
+  > `Microsoft.WindowsAppSDK.*` packages were searched and none contains `libEGL.dll` or
+  > `libGLESv2.dll`. The claim was asserted without checking, in the same document that
+  > exists to stop exactly that. Sourcing a GL context is an open problem, not a solved one.
 - **Debug only: `MPV_RENDER_API_TYPE_SW`** into a `WriteableBitmap`, for diagnosing a
   broken GPU path. Never shipped as the default; it burns CPU and will not hold 1080i.
 - **Never `--wid`.** Unchanged, and the prohibition matters more now that the convenient
