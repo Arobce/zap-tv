@@ -73,6 +73,21 @@ public sealed class SharedVideoTarget : IDisposable
         _texture ?? throw new ObjectDisposedException(nameof(SharedVideoTarget));
 
     /// <summary>
+    /// The D3D11 device backing the shared texture.
+    /// </summary>
+    /// <remarks>
+    /// The swap chain must be created on this same device. A swap chain on a different
+    /// device cannot receive a copy from this texture, and the failure is a cryptic
+    /// E_INVALIDARG from CopyResource rather than anything naming the mismatch.
+    /// </remarks>
+    public ID3D11Device Device =>
+        _device ?? throw new ObjectDisposedException(nameof(SharedVideoTarget));
+
+    /// <summary>The immediate context for this device.</summary>
+    public ID3D11DeviceContext DeviceContext =>
+        _deviceContext ?? throw new ObjectDisposedException(nameof(SharedVideoTarget));
+
+    /// <summary>
     /// Creates a shared target of the given size.
     /// </summary>
     /// <remarks>

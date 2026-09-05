@@ -1,5 +1,8 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Iptv.App/Iptv.App.csproj">
+      <Platform Project="x64" />
+    </Project>
     <Project Path="src/Iptv.Core/Iptv.Core.csproj" />
     <Project Path="src/Iptv.Harness/Iptv.Harness.csproj" />
     <Project Path="src/Iptv.Mpv/Iptv.Mpv.csproj" />

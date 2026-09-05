@@ -1,0 +1,72 @@
+<Window
+    x:Class="Iptv.App.MainWindow"
+    xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+    xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+
+    <!--
+        Phase 0.2 compositing spike. The question this window exists to answer is whether
+        XAML draws ABOVE the video. If it does, overlays, the EPG panel and context menus
+        all work. If it does not, the presentation path is wrong and no z-order change
+        fixes it: that is the airspace violation HWND embedding causes, and the reason
+        this design presents through a SwapChainPanel instead.
+
+        Note for anyone editing these comments: a double hyphen is illegal inside an XML
+        comment, and the XAML compiler fails with no message at all when it meets one.
+    -->
+    <Grid Background="Black">
+
+        <!-- The video surface. mpv renders into the swap chain attached to this panel. -->
+        <SwapChainPanel x:Name="VideoPanel" />
+
+        <!-- Deliberately semi-transparent: an opaque panel would look identical whether it
+             composited correctly or simply covered the video. -->
+        <Border x:Name="Overlay"
+                Background="#990066CC"
+                CornerRadius="12"
+                Padding="24,16"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Top"
+                Margin="0,32,0,0">
+            <StackPanel>
+                <TextBlock Text="XAML OVERLAY / 60% opaque"
+                           FontSize="22"
+                           FontWeight="SemiBold"
+                           Foreground="White"
+                           HorizontalAlignment="Center" />
+                <TextBlock Text="Video must be visible THROUGH this panel"
+                           FontSize="13"
+                           Foreground="#DDFFFFFF"
+                           HorizontalAlignment="Center"
+                           Margin="0,4,0,0" />
+            </StackPanel>
+        </Border>
+
+        <!-- A hard-edged translucent shape, so partial occlusion is obvious at a glance. -->
+        <Ellipse Width="160" Height="160"
+                 Fill="#66FF3366"
+                 Stroke="White"
+                 StrokeThickness="4"
+                 HorizontalAlignment="Center"
+                 VerticalAlignment="Center" />
+
+        <Border Background="#CC000000"
+                CornerRadius="8"
+                Padding="16,10"
+                HorizontalAlignment="Left"
+                VerticalAlignment="Bottom"
+                Margin="24">
+            <StackPanel>
+                <TextBlock x:Name="StatusText"
+                           Text="starting..."
+                           FontFamily="Consolas"
+                           FontSize="13"
+                           Foreground="#FF66FF99" />
+                <TextBlock x:Name="FrameText"
+                           Text=""
+                           FontFamily="Consolas"
+                           FontSize="13"
+                           Foreground="#FFAAAAAA" />
+            </StackPanel>
+        </Border>
+    </Grid>
+</Window>

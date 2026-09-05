@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      Unpackaged (WindowsPackageType=None). The PRD ships a Velopack installer and a
+      portable folder for HTPC users, neither of which is MSIX, so packaged identity would
+      only complicate the build for no benefit.
+    -->
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
+    <RootNamespace>Iptv.App</RootNamespace>
+    <UseWinUI>true</UseWinUI>
+    <WindowsPackageType>None</WindowsPackageType>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <Platforms>x64;ARM64</Platforms>
+    <RuntimeIdentifiers>win-x64;win-arm64</RuntimeIdentifiers>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+
+    <!--
+      WinUI's XAML compiler emits generated partials that trip several analyzers we
+      otherwise want on. Scoped to this project only; Iptv.Core and Iptv.Mpv keep the
+      full strictness.
+    -->
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <EnableMsixTooling>false</EnableMsixTooling>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.WindowsAppSDK" />
+    <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Iptv.Core\Iptv.Core.csproj" />
+    <ProjectReference Include="..\Iptv.Mpv\Iptv.Mpv.csproj" />
+  </ItemGroup>
+
+</Project>
