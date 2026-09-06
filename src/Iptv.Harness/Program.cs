@@ -29,6 +29,7 @@ internal static class Program
                 "sync" => await SyncAsync(CancellationToken.None).ConfigureAwait(false),
                 "epg" => await EpgAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "play" => await PlayAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "latency" => await LatencyAsync(args, CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -50,7 +51,166 @@ internal static class Program
         Console.WriteLine("  sync            Full live-channel sync against the configured provider");
         Console.WriteLine("  epg [file]      Ingest an XMLTV guide; downloads from the provider if no file");
         Console.WriteLine("  play [search]   Play a real stream and report decode diagnostics");
+        Console.WriteLine("  latency [n]     Compare mpv option profiles for time-to-first-frame");
         return 1;
+    }
+
+    /// <summary>
+    /// Compares mpv option profiles for time-to-first-frame against a real stream.
+    /// </summary>
+    /// <remarks>
+    /// Phase 7 Step 1. On a single-connection account the dual-handle prebuffering the
+    /// phase was designed around is unavailable, so the cold path is the entire feature
+    /// and is measured rather than tuned by intuition.
+    /// </remarks>
+    private static async Task<int> LatencyAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var trials = args.Length > 1 && int.TryParse(args[1], out var parsed) ? parsed : 3;
+
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer",
+            "harness.db");
+
+        var factory = new SqliteConnectionFactory(databasePath);
+        await using var connection = await factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var (title, url) = await FindStreamAsync(connection, null, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (url is null)
+        {
+            Console.Error.WriteLine("No streams in the library. Run 'sync' first.");
+            return 1;
+        }
+
+        if (!MpvLibrary.IsAvailable())
+        {
+            Console.Error.WriteLine("libmpv-2.dll not found.");
+            return 1;
+        }
+
+        Console.WriteLine($"channel: {title}");
+        Console.WriteLine($"trials per profile: {trials}   target: p50 under 800ms");
+        Console.WriteLine();
+
+        return await RunLatencyOnGlThreadAsync(url, trials).ConfigureAwait(false);
+    }
+
+    private static Task<int> RunLatencyOnGlThreadAsync(string url, int trials)
+    {
+        var completion = new TaskCompletionSource<int>();
+
+        var thread = new Thread(() =>
+        {
+            try
+            {
+                completion.SetResult(RunLatency(url, trials));
+            }
+            catch (Exception exception)
+            {
+                Console.Error.WriteLine(CredentialScrubber.Scrub(exception.ToString()));
+                completion.SetResult(4);
+            }
+        });
+
+        thread.SetApartmentState(ApartmentState.STA);
+        thread.Start();
+        return completion.Task;
+    }
+
+    private static int RunLatency(string url, int trials)
+    {
+        using var glContext = WglContext.Create();
+        glContext.MakeCurrent();
+
+        if (!glContext.Query().SupportsHardwarePath)
+        {
+            Console.Error.WriteLine("This machine cannot use the hardware path; results would not transfer.");
+            return 1;
+        }
+
+        var results = new List<(string Name, List<long> Samples, List<long> Loaded, string Rationale)>();
+
+        foreach (var profile in LatencyBench.Profiles)
+        {
+            Console.Write($"{profile.Name,-22}");
+            var samples = new List<long>();
+            var loaded = new List<long>();
+
+            for (var i = 0; i < trials; i++)
+            {
+                var measured = LatencyBench.Measure(profile, url, TimeSpan.FromSeconds(25));
+                if (measured is { } timing)
+                {
+                    samples.Add(timing.FirstFrameMs);
+                    if (timing.FileLoadedMs is { } l)
+                    {
+                        loaded.Add(l);
+                    }
+
+                    Console.Write($" {timing.FirstFrameMs,5}");
+                }
+                else
+                {
+                    Console.Write("   ---");
+                }
+
+                // The account permits one connection. Releasing it fully between trials
+                // keeps the provider from rejecting the next one, which would look like a
+                // latency result rather than a rate limit.
+                Thread.Sleep(1500);
+            }
+
+            Console.WriteLine();
+            results.Add((profile.Name, samples, loaded, profile.Rationale));
+        }
+
+        WglContext.ClearCurrent();
+
+        Console.WriteLine();
+        Console.WriteLine("== results, sorted by median time to first frame ==");
+        Console.WriteLine(
+            $"{"profile",-22} {"median",8} {"best",8} {"worst",8} {"open",8} {"decode",8}   {"vs base",8}");
+
+        var baseline = Median(results.First(r => r.Name == "baseline").Samples);
+
+        foreach (var (name, samples, loaded, rationale) in results.OrderBy(r => Median(r.Samples)))
+        {
+            if (samples.Count == 0)
+            {
+                Console.WriteLine($"{name,-22}   no successful trials");
+                continue;
+            }
+
+            var median = Median(samples);
+            var openMs = loaded.Count > 0 ? Median(loaded) : -1;
+            var decodeMs = openMs >= 0 ? median - openMs : -1;
+            var delta = baseline > 0 ? $"{(median - baseline) / (double)baseline * 100:+0;-0}%" : "n/a";
+            var target = median < 800 ? "  <- under 800ms" : string.Empty;
+
+            Console.WriteLine(
+                $"{name,-22} {median,8} {samples.Min(),8} {samples.Max(),8} " +
+                $"{(openMs >= 0 ? openMs.ToString() : "?"),8} " +
+                $"{(decodeMs >= 0 ? decodeMs.ToString() : "?"),8}   {delta,8}{target}");
+            Console.WriteLine($"{string.Empty,22} {rationale}");
+        }
+
+        Console.WriteLine();
+        Console.WriteLine("  open   = load command to FILE_LOADED: connect, probe, demux (provider + FFmpeg)");
+        Console.WriteLine("  decode = FILE_LOADED to first presentable frame (ours)");
+        return 0;
+    }
+
+    private static long Median(List<long> samples)
+    {
+        if (samples.Count == 0)
+        {
+            return long.MaxValue;
+        }
+
+        var ordered = samples.Order().ToList();
+        return ordered[ordered.Count / 2];
     }
 
     /// <summary>
@@ -155,6 +315,8 @@ internal static class Program
             ["hwdec"] = "auto-safe",
             ["profile"] = "low-latency",
             ["cache"] = "yes",
+            // Measured 11% faster to first frame; see docs/decisions/0008.
+            ["cache-pause-initial"] = "no",
             ["demuxer-lavf-o"] = "reconnect=1,reconnect_streamed=1,reconnect_delay_max=2",
             ["demuxer-max-bytes"] = "32MiB",
             ["demuxer-readahead-secs"] = "2",

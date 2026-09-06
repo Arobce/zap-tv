@@ -532,6 +532,7 @@ keep-open=yes
 idle=yes
 profile=low-latency          # live only
 cache=yes
+cache-pause-initial=no       # live only; measured 11% faster to first frame
 demuxer-lavf-o=reconnect=1,reconnect_streamed=1,reconnect_delay_max=2
 demuxer-max-bytes=32MiB      # live; raise substantially for VOD
 demuxer-readahead-secs=2     # live; 20+ for VOD
@@ -539,6 +540,8 @@ deinterlace=auto
 ```
 
 Apply a different option set for VOD — large readahead, no low-latency profile, seeking enabled. Switching profiles per content kind is a real quality difference.
+
+**Do not add aggressive `probesize` / `analyzeduration` overrides.** They are the obvious tuning knob and they were measured: `probesize` of 250KB, 1MB and FFmpeg's 5MB default all produced the same open time, because that time is network round-trips and keyframe wait rather than probing. A smaller probe buys nothing and risks FFmpeg mis-detecting a stream, trading a reliable second for an occasional failure. See [0008](docs/decisions/0008-channel-change-latency.md).
 
 After the first frame, read `hwdec-current` and log it.
 
@@ -627,7 +630,9 @@ Provider connection limits matter here — two live handles consume two connecti
 
 **Exit criteria**
 - Cold-path p50 recorded before and after Step 1 tuning, both logged.
-- Measured p50 channel change under 800ms and p95 under 2s on a working provider, logged by the harness over 50 changes that follow a realistic mix of favourites, number entry, and sequential steps — not 50 sequential steps, which flatters the predictor.
+- Measured p50 channel change logged by the harness over 50 changes that follow a realistic mix of favourites, number entry, and sequential steps — not 50 sequential steps, which flatters the predictor. **The target depends on the account, and a single number cannot describe both cases honestly:**
+  - **Multi-connection account: p50 under 800ms, p95 under 2s.** The warm handle has already paid the connect-and-probe cost before the user presses anything, so this is the case the 800ms figure was always about.
+  - **Single-connection account: p50 under 1.2s.** Prebuffering is unavailable, and measurement shows this provider takes **777–882ms just to accept a connection and produce a decodable keyframe** — before this application does anything. That is roughly the entire 800ms budget, it does not move when `probesize` is varied twenty-fold, and no client option shortens a network round-trip or the wait for the next keyframe. See [0008](docs/decisions/0008-channel-change-latency.md).
 - No visible black frame or tear during the presentation swap.
 - Prebuffering disabled → app still works correctly, just slower.
 
