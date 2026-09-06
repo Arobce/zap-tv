@@ -168,12 +168,24 @@ public sealed partial class MainWindow : Window
             // provider actually carries": a large share of this catalogue is filler that
             // never streams, and starting on one of those makes a working player look
             // broken.
-            var opening = _rows.Find(r => r.NowTitle is not null) ?? _rows.FirstOrDefault();
-            if (opening is not null)
+            // --test-pattern plays mpv's built-in generator instead of a provider stream.
+            // It takes the network, the provider and dead channels out of the picture, so
+            // a black panel can only be the rendering path. It also costs the account
+            // nothing, which matters on a single-connection subscription.
+            if (Environment.GetCommandLineArgs().Contains("--test-pattern", StringComparer.Ordinal))
             {
-                Log($"auto-play {opening.DisplayName} (guide: {opening.NowTitle ?? "none"})");
-                await PlayChannelAsync(opening);
+                Log("test pattern requested; not contacting the provider");
+                ChannelTitle.Text = "Test pattern";
+                ProgrammeTitle.Text = "av://lavfi:testsrc — no provider involved";
+                _switchTimer = Stopwatch.StartNew();
+                _handle!.Command("loadfile", "av://lavfi:testsrc=size=1280x720:rate=30");
+                return;
             }
+
+            // No auto-play against a real provider. Opening a stream the user did not ask
+            // for spends one of a single-connection account's only slot, and repeated
+            // launches look to the provider like connection abuse.
+            StatusText.Text = "ready — pick a channel";
         }
         catch (Exception exception)
         {
