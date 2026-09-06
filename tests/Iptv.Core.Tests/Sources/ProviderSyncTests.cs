@@ -244,6 +244,25 @@ public sealed class ProviderSyncTests
         Assert.Equal(1, await CountAsync(connection, "SELECT count(*) FROM channels"));
     }
 
+    [Fact]
+    public async Task Syncing_one_kind_does_not_deactivate_another()
+    {
+        await using var db = new TempDatabase();
+        await using var connection = await OpenMigratedAsync(db);
+
+        var live = Record("1", "BBC One", "tvg:bbc1");
+        var movie = Record("2", "Some Film", "name:somefilm") with { Kind = StreamKind.Vod };
+
+        await ProviderSync.SyncAsync(connection, 1, [live], StreamKind.Live, Now, CancellationToken.None);
+        await ProviderSync.SyncAsync(connection, 1, [movie], StreamKind.Vod, Now, CancellationToken.None);
+
+        // Live and VOD are fetched by separate endpoints and synced separately. Scoping
+        // deactivation to the provider alone would let the VOD sync deactivate every live
+        // channel, and the next live sync would reactivate them - an invisible churn that
+        // rewrites is_active on the whole library twice per refresh.
+        Assert.Equal(2, await CountAsync(connection, "SELECT count(*) FROM streams WHERE is_active = 1"));
+    }
+
     private static async Task<long> CountAsync(SqliteConnection connection, string sql)
     {
         await using var command = connection.CreateCommand();

@@ -124,6 +124,22 @@ public sealed class VodAndSeriesMappingTests
     }
 
     [Fact]
+    public void An_explicitly_null_seasons_array_reads_as_empty()
+    {
+        // Distinct from the omitted case, and the distinction is not academic: a property
+        // initializer only applies when the key is absent. With "seasons": null present,
+        // System.Text.Json overwrites it, and the initializer never runs. Real payloads
+        // send explicit nulls, and this crashed a full sync after 158,255 films had
+        // already been fetched.
+        var series = JsonSerializer.Deserialize<XtreamSeries>(
+            """{"name":"X","series_id":1,"seasons":null}""", XtreamJson.Options)!;
+
+        Assert.NotNull(series.Seasons);
+        Assert.Empty(series.Seasons);
+        Assert.Equal(0, SeriesMapper.FromXtream(series, providerId: 1).SeasonCount);
+    }
+
+    [Fact]
     public void Maps_a_series_to_a_record()
     {
         var series = ReadFixture<List<XtreamSeries>>("get_series.json")[0];

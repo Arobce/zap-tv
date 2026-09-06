@@ -264,7 +264,21 @@ public sealed record XtreamSeries
     [JsonPropertyName("last_modified")]
     public long? LastModifiedUnix { get; init; }
 
-    /// <summary>Empty rather than null when the panel omits the array.</summary>
+    private readonly IReadOnlyList<XtreamSeason>? _seasons;
+
+    /// <summary>
+    /// Empty rather than null, whether the panel omits the array or sends an explicit null.
+    /// </summary>
+    /// <remarks>
+    /// A plain <c>= []</c> initializer is not enough. It applies only when the key is
+    /// absent; with <c>"seasons": null</c> present, the deserializer assigns null over it.
+    /// Real payloads send explicit nulls, and relying on the initializer crashed a full
+    /// sync after 158,255 films had already been fetched.
+    /// </remarks>
     [JsonPropertyName("seasons")]
-    public IReadOnlyList<XtreamSeason> Seasons { get; init; } = [];
+    public IReadOnlyList<XtreamSeason> Seasons
+    {
+        get => _seasons ?? [];
+        init => _seasons = value;
+    }
 }

@@ -679,9 +679,49 @@ internal static class Program
         await ProviderSync.RefreshChannelsAsync(connection, cancellationToken).ConfigureAwait(false);
         write.Stop();
 
-        Console.WriteLine($"  added {summary.Added:N0}  updated {summary.Updated:N0}  " +
+        Console.WriteLine($"  live: added {summary.Added:N0}  updated {summary.Updated:N0}  " +
                           $"reactivated {summary.Reactivated:N0}  deactivated {summary.Deactivated:N0}  " +
                           $"pruned {summary.Pruned:N0}");
+
+        // VOD and series are separate endpoints and separate catalogues. Deactivation is
+        // scoped per kind, so syncing one cannot deactivate another.
+        Console.WriteLine();
+        Console.WriteLine("== vod ==");
+        var vodFetch = Stopwatch.StartNew();
+        var movies = new List<StreamRecord>(capacity: 16_000);
+        await foreach (var movie in client.GetVodStreamsAsync(cancellationToken).ConfigureAwait(false))
+        {
+            movies.Add(StreamMapper.FromXtreamVod(movie, providerId, credentials));
+        }
+
+        vodFetch.Stop();
+        Console.WriteLine($"  {movies.Count:N0} films in {vodFetch.ElapsedMilliseconds:N0}ms");
+
+        var vodSummary = await ProviderSync
+            .SyncAsync(connection, providerId, movies, StreamKind.Vod, DateTimeOffset.UtcNow, cancellationToken)
+            .ConfigureAwait(false);
+        Console.WriteLine($"  added {vodSummary.Added:N0}  updated {vodSummary.Updated:N0}  " +
+                          $"deactivated {vodSummary.Deactivated:N0}");
+
+        Console.WriteLine();
+        Console.WriteLine("== series ==");
+        var seriesFetch = Stopwatch.StartNew();
+        var shows = new List<SeriesRecord>(capacity: 64_000);
+        await foreach (var show in client.GetSeriesAsync(cancellationToken).ConfigureAwait(false))
+        {
+            shows.Add(SeriesMapper.FromXtream(show, providerId));
+        }
+
+        seriesFetch.Stop();
+        Console.WriteLine($"  {shows.Count:N0} series in {seriesFetch.ElapsedMilliseconds:N0}ms " +
+                          $"({shows.Sum(s => s.SeasonCount):N0} seasons declared)");
+        Console.WriteLine("  episodes are NOT fetched: one request per series would be " +
+                          $"{shows.Count:N0} requests on a {account.MaxConnections}-connection account");
+
+        var seriesSummary = await SeriesSync
+            .SyncAsync(connection, providerId, shows, cancellationToken)
+            .ConfigureAwait(false);
+        Console.WriteLine($"  added {seriesSummary.Added:N0}  updated {seriesSummary.Updated:N0}");
         Console.WriteLine($"  wrote in {write.ElapsedMilliseconds:N0}ms");
         Console.WriteLine($"  channels         {await ScalarAsync(connection, "SELECT count(*) FROM channels"):N0}");
         Console.WriteLine($"  distinct keys    {await ScalarAsync(connection, "SELECT count(DISTINCT channel_key) FROM streams"):N0}");

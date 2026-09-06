@@ -31,11 +31,33 @@ public static class ProviderSync
     /// <summary>How long a stream must stay absent before it is deleted outright.</summary>
     private const int PruneAfterDays = 30;
 
-    /// <summary>Merges <paramref name="streams"/> into the library for one provider.</summary>
+    /// <summary>Merges a provider's live channels.</summary>
+    public static Task<SyncSummary> SyncAsync(
+        SqliteConnection connection,
+        int providerId,
+        IEnumerable<StreamRecord> streams,
+        DateTimeOffset now,
+        CancellationToken cancellationToken)
+        => SyncAsync(connection, providerId, streams, StreamKind.Live, now, cancellationToken);
+
+    /// <summary>
+    /// Merges one kind of a provider's catalogue.
+    /// </summary>
+    /// <param name="kind">
+    /// Which catalogue this payload represents. Deactivation is scoped to it.
+    /// </param>
+    /// <remarks>
+    /// The kind matters because live, VOD and series come from separate endpoints and are
+    /// synced separately. Scoping deactivation to the provider alone would let a VOD sync
+    /// deactivate every live channel, which the next live sync would then reactivate:
+    /// invisible churn rewriting <c>is_active</c> across the whole library twice per
+    /// refresh, and a window in between where the channel list is empty.
+    /// </remarks>
     public static async Task<SyncSummary> SyncAsync(
         SqliteConnection connection,
         int providerId,
         IEnumerable<StreamRecord> streams,
+        StreamKind kind,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
@@ -82,11 +104,11 @@ public static class ProviderSync
         }
 
         var deactivated = await DeactivateAbsentAsync(
-            connection, (SqliteTransaction)transaction, providerId, cancellationToken)
+            connection, (SqliteTransaction)transaction, providerId, kind, cancellationToken)
             .ConfigureAwait(false);
 
         var pruned = await PruneLongAbsentAsync(
-            connection, (SqliteTransaction)transaction, providerId, timestamp, cancellationToken)
+            connection, (SqliteTransaction)transaction, providerId, kind, timestamp, cancellationToken)
             .ConfigureAwait(false);
 
         await transaction.CommitAsync(cancellationToken).ConfigureAwait(false);
@@ -313,6 +335,7 @@ public static class ProviderSync
         SqliteConnection connection,
         SqliteTransaction transaction,
         int providerId,
+        StreamKind kind,
         CancellationToken cancellationToken)
     {
         await using var command = connection.CreateCommand();
@@ -325,6 +348,7 @@ public static class ProviderSync
             UPDATE streams
                SET is_active = 0
              WHERE provider_id = @provider_id
+               AND kind = @kind
                AND is_active = 1
                AND NOT EXISTS (
                    SELECT 1 FROM temp.sync_seen s
@@ -332,6 +356,7 @@ public static class ProviderSync
                       AND s.kind = streams.kind);
             """;
         command.Parameters.AddWithValue("@provider_id", providerId);
+        command.Parameters.AddWithValue("@kind", ToDbKind(kind));
 
         return await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
     }
@@ -341,6 +366,7 @@ public static class ProviderSync
         SqliteConnection connection,
         SqliteTransaction transaction,
         int providerId,
+        StreamKind kind,
         long timestamp,
         CancellationToken cancellationToken)
     {
@@ -350,11 +376,13 @@ public static class ProviderSync
             """
             DELETE FROM streams
              WHERE provider_id = @provider_id
+               AND kind = @kind
                AND is_active = 0
                AND last_seen_utc IS NOT NULL
                AND last_seen_utc < @cutoff;
             """;
         command.Parameters.AddWithValue("@provider_id", providerId);
+        command.Parameters.AddWithValue("@kind", ToDbKind(kind));
         command.Parameters.AddWithValue(
             "@cutoff", timestamp - (PruneAfterDays * 24L * 60 * 60));
 

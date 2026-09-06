@@ -99,6 +99,21 @@ public sealed class XtreamClient
     public IAsyncEnumerable<XtreamCategory> GetSeriesCategoriesAsync(CancellationToken cancellationToken)
         => StreamAsync<XtreamCategory>("get_series_categories", cancellationToken);
 
+    /// <summary>Streams the VOD catalogue.</summary>
+    public IAsyncEnumerable<XtreamVodStream> GetVodStreamsAsync(CancellationToken cancellationToken)
+        => StreamAsync<XtreamVodStream>("get_vod_streams", cancellationToken);
+
+    /// <summary>
+    /// Streams the series listing. 49,748 on the reference provider, 75MB.
+    /// </summary>
+    /// <remarks>
+    /// Seasons arrive inline; episodes do not. Fetching episodes needs one
+    /// <c>get_series_info</c> call per series, so they are loaded when a series is opened
+    /// rather than during sync.
+    /// </remarks>
+    public IAsyncEnumerable<XtreamSeries> GetSeriesAsync(CancellationToken cancellationToken)
+        => StreamAsync<XtreamSeries>("get_series", cancellationToken);
+
     /// <summary>Streams the live channels. 28,285 on the reference provider.</summary>
     public IAsyncEnumerable<XtreamLiveStream> GetLiveStreamsAsync(CancellationToken cancellationToken)
         => StreamAsync<XtreamLiveStream>("get_live_streams", cancellationToken);
