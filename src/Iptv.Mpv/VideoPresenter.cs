@@ -44,6 +44,7 @@ public sealed class VideoPresenter : IDisposable
     private Thread? _renderThread;
     private IDXGISwapChain1? _swapChain;
     private long _framesPresented;
+    private long _loopIterations;
 
     public VideoPresenter(MpvHandle handle, int width, int height)
     {
@@ -64,6 +65,25 @@ public sealed class VideoPresenter : IDisposable
 
     /// <summary>Frames presented since start, for diagnostics.</summary>
     public long FramesPresented => Interlocked.Read(ref _framesPresented);
+
+    /// <summary>
+    /// Whatever killed the render thread, or null while it is healthy.
+    /// </summary>
+    /// <remarks>
+    /// A dead render thread and an idle one look identical from outside: no frames, no
+    /// error. This is the difference.
+    /// </remarks>
+    public Exception? Fault { get; private set; }
+
+    /// <summary>Raised on the render thread when it dies.</summary>
+    public event EventHandler<Exception>? RenderThreadFaulted;
+
+    /// <summary>Iterations of the present loop, whether or not a frame was ready.</summary>
+    /// <remarks>
+    /// Distinguishes "the loop is running and mpv has nothing" from "the loop is not
+    /// running", which <see cref="FramesPresented"/> alone cannot.
+    /// </remarks>
+    public long LoopIterations => Interlocked.Read(ref _loopIterations);
 
     /// <summary>
     /// Starts the render thread and completes once the swap chain exists.
@@ -126,6 +146,12 @@ public sealed class VideoPresenter : IDisposable
         }
         catch (Exception exception)
         {
+            // TrySetException is a no-op once the task has completed, so a failure inside
+            // Present would otherwise vanish entirely: the render thread dies, frames stop,
+            // and nothing anywhere reports why. Recording it separately is what makes a
+            // silent black screen diagnosable.
+            Fault = exception;
+            RenderThreadFaulted?.Invoke(this, exception);
             _swapChainReady.TrySetException(exception);
         }
         finally
@@ -149,6 +175,8 @@ public sealed class VideoPresenter : IDisposable
 
         while (!token.IsCancellationRequested)
         {
+            Interlocked.Increment(ref _loopIterations);
+
             if (!renderer.HasFrameReady())
             {
                 // mpv has nothing new. Sleeping briefly rather than spinning keeps a core
