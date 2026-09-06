@@ -83,6 +83,20 @@ public sealed partial class MainWindow : Window
     private Stopwatch? _switchTimer;
     private bool _swapChainAttached;
 
+    /// <summary>
+    /// Guards the provider against this application.
+    /// </summary>
+    /// <remarks>
+    /// One connection and a two-second floor between channel changes, until the account
+    /// is read and the real limit is known. Two seconds is short enough not to be felt
+    /// while surfing and long enough that holding a key down cannot open dozens of
+    /// streams, which is what gets an account blocked.
+    /// </remarks>
+    private readonly ProviderConnectionLimiter _connections =
+        new(maxConnections: 1, minimumInterval: TimeSpan.FromSeconds(2));
+
+    private ConnectionLease? _currentStream;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -160,14 +174,6 @@ public sealed partial class MainWindow : Window
         {
             await StartPlayerAsync();
 
-            // Start on the first channel rather than an empty screen. A TV app that opens
-            // showing nothing is asking the user to do work before it has done any, and
-            // it also means the playback path is exercised on every launch rather than
-            // only when someone clicks.
-            // Prefer a channel the guide covers. It is a proxy for "real channel the
-            // provider actually carries": a large share of this catalogue is filler that
-            // never streams, and starting on one of those makes a working player look
-            // broken.
             // --test-pattern plays mpv's built-in generator instead of a provider stream.
             // It takes the network, the provider and dead channels out of the picture, so
             // a black panel can only be the rendering path. It also costs the account
@@ -398,6 +404,23 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        // Release the previous channel's slot before taking one for the new channel.
+        // loadfile replaces the stream anyway, but the accounting has to match reality or
+        // the limiter refuses every change after the first.
+        _currentStream?.Dispose();
+        _currentStream = null;
+
+        if (!_connections.TryAcquire(out var lease))
+        {
+            // Says why rather than doing nothing. A button that silently ignores a click
+            // is indistinguishable from a broken one, and the wait is short.
+            var wait = _connections.TimeUntilNextOpen;
+            StatusText.Text = $"easing off the provider — retry in {wait.TotalSeconds:F0}s";
+            Log($"channel change refused by limiter; {wait.TotalMilliseconds:F0}ms remaining");
+            return;
+        }
+
+        _currentStream = lease;
         _switchTimer = Stopwatch.StartNew();
         StatusText.Text = "opening...";
 
@@ -417,6 +440,11 @@ public sealed partial class MainWindow : Window
     {
         _searchDebounce.Stop();
         _heartbeat.Stop();
+
+        // Release the provider slot before anything else: the stream must be given back
+        // even if teardown below throws.
+        _currentStream?.Dispose();
+        _currentStream = null;
 
         // Presenter first: its render thread owns the GL and mpv render contexts, and both
         // must be released before the handle they were created from.

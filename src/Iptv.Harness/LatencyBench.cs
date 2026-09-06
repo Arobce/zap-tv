@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using Iptv.Core.Sources;
 using Iptv.Mpv;
 
 namespace Iptv.Harness;
@@ -107,15 +108,42 @@ internal static class LatencyBench
             })),
     ];
 
+    /// <summary>
+    /// Guards the provider against this benchmark.
+    /// </summary>
+    /// <remarks>
+    /// An earlier version of this benchmark opened 30 streams in quick succession against
+    /// an account permitting one, and the provider blocked it for hours. The limiter makes
+    /// that impossible rather than relying on whoever runs it to remember. Five seconds
+    /// between opens is deliberately conservative: the measurement is of the open itself,
+    /// so waiting longer costs only wall-clock time.
+    /// </remarks>
+    private static readonly ProviderConnectionLimiter Limiter =
+        new(maxConnections: 1, minimumInterval: TimeSpan.FromSeconds(5));
+
     /// <summary>Runs one trial and returns time to first rendered frame, or null on failure.</summary>
     /// <remarks>
     /// Measures to the first frame this application can actually present, not to
-    /// <c>FILE_LOADED</c>. The user's experience of a channel change ends when a picture
-    /// appears, and the gap between those two events is exactly what this is trying to
-    /// shrink.
+    /// <c>FILE_LOADED</c>. A channel change ends, for the user, when a picture appears.
     /// </remarks>
     internal static Timing? Measure(LatencyProfile profile, string url, TimeSpan timeout)
     {
+        // Blocks rather than failing: a refused trial would silently skew the median, and
+        // the benchmark is not in a hurry.
+        ConnectionLease? lease = null;
+        var waited = Stopwatch.StartNew();
+        while (!Limiter.TryAcquire(out lease))
+        {
+            if (waited.Elapsed > TimeSpan.FromMinutes(1))
+            {
+                throw new InvalidOperationException(
+                    "Could not acquire a provider connection slot within a minute.");
+            }
+
+            Thread.Sleep(250);
+        }
+
+        using var connection = lease;
         using var handle = MpvHandle.Create(profile.Options);
         using var renderer = MpvOpenGlRenderer.Create(handle);
         using var target = SharedVideoTarget.Create(1280, 720);

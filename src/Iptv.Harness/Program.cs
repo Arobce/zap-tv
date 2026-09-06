@@ -156,10 +156,8 @@ internal static class Program
                     Console.Write("   ---");
                 }
 
-                // The account permits one connection. Releasing it fully between trials
-                // keeps the provider from rejecting the next one, which would look like a
-                // latency result rather than a rate limit.
-                Thread.Sleep(1500);
+                // Pacing is enforced by ProviderConnectionLimiter inside Measure rather than
+                // by a sleep here, so it cannot be forgotten or tuned away.
             }
 
             Console.WriteLine();
