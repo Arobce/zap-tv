@@ -166,3 +166,105 @@ public sealed record XtreamLiveStream
     [JsonPropertyName("direct_source")]
     public string? DirectSource { get; init; }
 }
+
+/// <summary>One entry from <c>get_vod_streams</c>.</summary>
+public sealed record XtreamVodStream
+{
+    [JsonPropertyName("num")]
+    public int Num { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("stream_id")]
+    public long StreamId { get; init; }
+
+    [JsonPropertyName("stream_icon")]
+    public string? StreamIcon { get; init; }
+
+    [JsonPropertyName("rating")]
+    public string? Rating { get; init; }
+
+    [JsonPropertyName("added")]
+    public long? AddedUnix { get; init; }
+
+    [JsonPropertyName("category_id")]
+    public string? CategoryId { get; init; }
+
+    /// <summary>Extension for the playback URL. Absent on some panels.</summary>
+    [JsonPropertyName("container_extension")]
+    public string? ContainerExtension { get; init; }
+
+    [JsonPropertyName("direct_source")]
+    public string? DirectSource { get; init; }
+}
+
+/// <summary>A season declared inline by <c>get_series</c>.</summary>
+public sealed record XtreamSeason
+{
+    [JsonPropertyName("season_number")]
+    public int SeasonNumber { get; init; }
+
+    [JsonPropertyName("episode_count")]
+    public int EpisodeCount { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("air_date")]
+    public string? AirDate { get; init; }
+
+    [JsonPropertyName("cover")]
+    public string? Cover { get; init; }
+}
+
+/// <summary>
+/// One entry from <c>get_series</c>.
+/// </summary>
+/// <remarks>
+/// Seasons arrive inline; episodes do not. Episodes require a <c>get_series_info</c> call
+/// per series, and the reference provider lists 49,748 of them, so they are fetched when a
+/// series is opened rather than during sync.
+/// </remarks>
+public sealed record XtreamSeries
+{
+    [JsonPropertyName("num")]
+    public int Num { get; init; }
+
+    [JsonPropertyName("name")]
+    public string? Name { get; init; }
+
+    [JsonPropertyName("series_id")]
+    public long SeriesId { get; init; }
+
+    [JsonPropertyName("cover")]
+    public string? Cover { get; init; }
+
+    [JsonPropertyName("plot")]
+    public string? Plot { get; init; }
+
+    [JsonPropertyName("cast")]
+    public string? Cast { get; init; }
+
+    [JsonPropertyName("director")]
+    public string? Director { get; init; }
+
+    [JsonPropertyName("genre")]
+    public string? Genre { get; init; }
+
+    [JsonPropertyName("releaseDate")]
+    public string? ReleaseDate { get; init; }
+
+    [JsonPropertyName("rating")]
+    public string? Rating { get; init; }
+
+    [JsonPropertyName("category_id")]
+    public string? CategoryId { get; init; }
+
+    [JsonPropertyName("last_modified")]
+    public long? LastModifiedUnix { get; init; }
+
+    /// <summary>Empty rather than null when the panel omits the array.</summary>
+    [JsonPropertyName("seasons")]
+    public IReadOnlyList<XtreamSeason> Seasons { get; init; } = [];
+}

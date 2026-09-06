@@ -14,6 +14,52 @@ namespace Iptv.Core.Sources;
 public static class StreamMapper
 {
     /// <summary>Maps a live channel from <c>get_live_streams</c>.</summary>
+    /// <summary>Maps a film from <c>get_vod_streams</c>.</summary>
+    /// <remarks>
+    /// Identity, quality and separator detection are the same as for live channels, and
+    /// deliberately so: a film carried by two providers should dedup, and
+    /// <c>playback_state</c> is keyed on <c>channel_key</c> so resume position follows the
+    /// content rather than one provider's copy of it.
+    /// </remarks>
+    public static StreamRecord FromXtreamVod(
+        XtreamVodStream stream,
+        int providerId,
+        XtreamCredentials credentials)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+        ArgumentNullException.ThrowIfNull(credentials);
+
+        var title = stream.Name ?? string.Empty;
+        var providerStreamId = stream.StreamId.ToString(CultureInfo.InvariantCulture);
+        var normalized = ChannelNormalizer.Normalize(title);
+
+        // Guessing beats refusing to build a URL. mp4 is right far more often than not,
+        // and a wrong guess fails visibly at playback rather than silently dropping the
+        // film from the library.
+        var container = string.IsNullOrWhiteSpace(stream.ContainerExtension)
+            ? "mp4"
+            : stream.ContainerExtension.TrimStart('.');
+
+        return new StreamRecord
+        {
+            ProviderId = providerId,
+            ProviderStreamId = providerStreamId,
+            Kind = StreamKind.Vod,
+            Title = title,
+            NormalizedTitle = normalized,
+            ChannelKey = DeriveKey(tvgId: null, normalized, providerId, providerStreamId),
+            Url = string.IsNullOrWhiteSpace(stream.DirectSource)
+                ? credentials.BuildVodUrl(stream.StreamId, container).AbsoluteUri
+                : stream.DirectSource,
+            LogoUrl = stream.StreamIcon,
+            CategoryId = stream.CategoryId,
+            Container = container,
+            Quality = ChannelNormalizer.ExtractQuality(title),
+            Country = ChannelNormalizer.ExtractCountry(title),
+            IsSeparator = StreamClassifier.IsSeparator(title),
+        };
+    }
+
     public static StreamRecord FromXtreamLive(
         XtreamLiveStream stream,
         int providerId,
