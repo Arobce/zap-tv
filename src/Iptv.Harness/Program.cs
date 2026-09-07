@@ -30,6 +30,7 @@ internal static class Program
                 "epg" => await EpgAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "play" => await PlayAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "latency" => await LatencyAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "coverage" => await CoverageAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -52,7 +53,34 @@ internal static class Program
         Console.WriteLine("  epg [file]      Ingest an XMLTV guide; downloads from the provider if no file");
         Console.WriteLine("  play [search]   Play a real stream and report decode diagnostics");
         Console.WriteLine("  latency [n]     Compare mpv option profiles for time-to-first-frame");
+        Console.WriteLine("  coverage        Re-run EPG matching and report coverage; no network");
         return 1;
+    }
+
+    /// <summary>Re-runs EPG matching over the stored guide and reports coverage.</summary>
+    /// <remarks>
+    /// No network. Matching is cheap and the guide is already ingested, so re-measuring
+    /// coverage should not cost a 64MB download or a provider request.
+    /// </remarks>
+    private static async Task<int> CoverageAsync(CancellationToken cancellationToken)
+    {
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer",
+            "harness.db");
+
+        var factory = new SqliteConnectionFactory(databasePath);
+        await using var connection = await factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var report = await EpgMatcher.MatchAsync(connection, cancellationToken).ConfigureAwait(false);
+
+        Console.WriteLine("== EPG coverage ==");
+        Console.WriteLine($"  live channels      {report.TotalChannels:N0}  (VOD and separators excluded)");
+        Console.WriteLine($"  matched            {report.Matched:N0}");
+        Console.WriteLine($"  guide ceiling      {report.Ceiling:N0}");
+        Console.WriteLine($"  library coverage   {report.LibraryCoverage:P1}");
+        Console.WriteLine($"  ceiling recovery   {report.CeilingRecovery:P1}   <- judges the matcher");
+        return 0;
     }
 
     /// <summary>
@@ -558,7 +586,8 @@ internal static class Program
             SELECT count(DISTINCT s.channel_key)
             FROM streams s
             JOIN epg_channels e ON lower(e.epg_channel_id) = lower(s.tvg_id)
-            WHERE s.is_separator = 0 AND s.tvg_id IS NOT NULL AND s.tvg_id <> '';
+            WHERE s.is_separator = 0 AND s.kind = 'live'
+              AND s.tvg_id IS NOT NULL AND s.tvg_id <> '';
             """);
 
         // Matching an id is not the same as having a guide. A declared channel with no
@@ -569,7 +598,8 @@ internal static class Program
             SELECT count(DISTINCT s.channel_key)
             FROM streams s
             JOIN epg_channels e ON lower(e.epg_channel_id) = lower(s.tvg_id)
-            WHERE s.is_separator = 0 AND s.tvg_id IS NOT NULL AND s.tvg_id <> ''
+            WHERE s.is_separator = 0 AND s.kind = 'live'
+              AND s.tvg_id IS NOT NULL AND s.tvg_id <> ''
               AND EXISTS (SELECT 1 FROM programmes p WHERE p.epg_channel_id = e.epg_channel_id);
             """);
 
@@ -578,10 +608,19 @@ internal static class Program
         var guideChannels = await ScalarAsync(
             connection, "SELECT count(DISTINCT epg_channel_id) FROM programmes");
 
-        var channels = await ScalarAsync(connection, "SELECT count(*) FROM channels");
+        // Live channels only: films have no broadcast schedule, so including them measures
+        // how much of a film library a TV guide covers, which means nothing.
+        var channels = await ScalarAsync(
+            connection,
+            """
+            SELECT count(*) FROM channels c
+            WHERE EXISTS (SELECT 1 FROM streams s
+                           WHERE s.channel_key = c.channel_key
+                             AND s.kind = 'live' AND s.is_separator = 0);
+            """);
         if (channels > 0)
         {
-            Console.WriteLine($"  user channels         {channels:N0}");
+            Console.WriteLine($"  live channels         {channels:N0}  (VOD excluded: films have no guide)");
             Console.WriteLine($"  id match              {byId:N0} ({byId / (double)channels:P1})");
             Console.WriteLine($"  id match with a guide {withProgrammes:N0} ({withProgrammes / (double)channels:P1})");
             Console.WriteLine($"  CEILING, any matcher  {guideChannels:N0} ({guideChannels / (double)channels:P1})");

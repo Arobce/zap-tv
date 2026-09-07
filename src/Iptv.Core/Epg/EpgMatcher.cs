@@ -111,6 +111,7 @@ public static class EpgMatcher
             JOIN channels c  ON c.channel_key = s.channel_key
             JOIN epg_channels e ON lower(e.epg_channel_id) = lower(s.tvg_id)
             WHERE s.is_separator = 0
+              AND s.kind = 'live'
               AND s.tvg_id IS NOT NULL
               AND s.tvg_id <> ''
               AND EXISTS (
@@ -124,16 +125,22 @@ public static class EpgMatcher
         SqliteConnection connection,
         CancellationToken cancellationToken)
     {
-        // Separators are excluded from the denominator: they are section headings, not
-        // channels, and 1,137 of them would understate coverage by several percent while
-        // presenting dividers as things needing a guide.
+        // Live channels only, and non-separators only.
+        //
+        // EPG describes broadcast schedules. A film has no "now and next", so counting VOD
+        // in the denominator measures how much of a film library a TV guide covers, which
+        // is a meaningless number: on the reference library it reported 3.1% coverage for a
+        // matcher recovering 99.4% of everything the guide can supply. Separators are
+        // excluded for the same reason - they are section headings, not channels.
         var total = await ScalarAsync(
             connection,
             """
             SELECT count(*) FROM channels c
             WHERE EXISTS (
                 SELECT 1 FROM streams s
-                 WHERE s.channel_key = c.channel_key AND s.is_separator = 0);
+                 WHERE s.channel_key = c.channel_key
+                   AND s.kind = 'live'
+                   AND s.is_separator = 0);
             """,
             cancellationToken).ConfigureAwait(false);
 

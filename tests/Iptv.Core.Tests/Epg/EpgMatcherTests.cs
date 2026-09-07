@@ -178,6 +178,36 @@ public sealed class EpgMatcherTests
     }
 
     [Fact]
+    public async Task Vod_is_excluded_from_the_coverage_denominator()
+    {
+        await using var db = new TempDatabase();
+        await using var connection = await OpenAsync(db);
+
+        await AddChannelAsync(connection, "tvg:a", "A", "a");
+        await AddGuideChannelAsync(connection, "a", "A");
+
+        // A film. The reference library holds 158,255 of these against 20,478 live
+        // channels.
+        await ExecuteAsync(connection,
+            """
+            INSERT INTO streams (provider_id, provider_stream_id, kind, title, normalized_title,
+                                 url, channel_key, is_active, last_seen_utc)
+            VALUES (1, 'm1', 'vod', 'Some Film', 'some film',
+                    'http://x/m1.mp4', 'name:somefilm', 1, 0);
+            INSERT INTO channels (channel_key, display_name) VALUES ('name:somefilm', 'Some Film');
+            """);
+
+        var report = await EpgMatcher.MatchAsync(connection, CancellationToken.None);
+
+        // EPG describes broadcast schedules. A film has no "now and next", so counting VOD
+        // in the denominator would have reported 3.1% coverage for a matcher recovering
+        // 99.4% of what the guide can supply - a working feature reported as broken, and
+        // the next person sent to optimise the wrong thing.
+        Assert.Equal(1, report.TotalChannels);
+        Assert.Equal(1, report.Matched);
+    }
+
+    [Fact]
     public async Task Reports_coverage_against_the_guide_ceiling_as_well_as_the_library()
     {
         await using var db = new TempDatabase();
