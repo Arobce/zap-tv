@@ -31,8 +31,17 @@
                            Text="loading library..."
                            FontSize="12"
                            Foreground="#FF8A8A99" />
+
+                <!-- Three catalogues, one list. Live, films and series differ enough in
+                     shape to need separate queries but not separate views. -->
+                <StackPanel Orientation="Horizontal" Spacing="6">
+                    <Button x:Name="LiveTab" Content="Live" Click="OnModeClicked" Tag="Live" />
+                    <Button x:Name="FilmsTab" Content="Films" Click="OnModeClicked" Tag="Film" />
+                    <Button x:Name="SeriesTab" Content="Series" Click="OnModeClicked" Tag="Series" />
+                </StackPanel>
+
                 <TextBox x:Name="SearchBox"
-                         PlaceholderText="Search channels"
+                         PlaceholderText="Search"
                          TextChanged="OnSearchChanged" />
             </StackPanel>
 
@@ -43,21 +52,21 @@
             <ScrollViewer Grid.Row="1" Padding="8,0,8,0">
                 <ItemsRepeater x:Name="ChannelList">
                     <ItemsRepeater.ItemTemplate>
-                        <DataTemplate x:DataType="local:ChannelRow">
+                        <DataTemplate x:DataType="local:LibraryRow">
                             <Button HorizontalAlignment="Stretch"
                                     HorizontalContentAlignment="Left"
                                     Background="Transparent"
                                     BorderThickness="0"
                                     Padding="10,8"
                                     Margin="0,1"
-                                    Click="OnChannelClicked"
-                                    Tag="{x:Bind ChannelKey}">
+                                    Click="OnRowClicked"
+                                    Tag="{x:Bind Key}">
                                 <StackPanel Spacing="3">
-                                    <TextBlock Text="{x:Bind DisplayName}"
+                                    <TextBlock Text="{x:Bind Title}"
                                                FontSize="14"
                                                Foreground="#FFEDEDF2"
                                                TextTrimming="CharacterEllipsis" />
-                                    <TextBlock Text="{x:Bind NowLine}"
+                                    <TextBlock Text="{x:Bind Subtitle}"
                                                FontSize="11"
                                                Foreground="#FF7E7E8F"
                                                TextTrimming="CharacterEllipsis" />

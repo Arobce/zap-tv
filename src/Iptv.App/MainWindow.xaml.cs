@@ -57,7 +57,10 @@ public sealed partial class MainWindow : Window
 
     private readonly DispatcherQueueTimer _searchDebounce;
     private readonly DispatcherQueueTimer _heartbeat;
-    private readonly List<ChannelRow> _rows = [];
+    private readonly List<LibraryRow> _rows = [];
+
+    /// <summary>Which catalogue the list is showing.</summary>
+    private LibraryKind _mode = LibraryKind.Live;
 
     private static void Log(string message)
     {
@@ -112,7 +115,7 @@ public sealed partial class MainWindow : Window
         _searchDebounce = DispatcherQueue.CreateTimer();
         _searchDebounce.Interval = TimeSpan.FromMilliseconds(80);
         _searchDebounce.IsRepeating = false;
-        _searchDebounce.Tick += async (_, _) => await LoadChannelsAsync(SearchBox.Text);
+        _searchDebounce.Tick += async (_, _) => await LoadLibraryAsync(SearchBox.Text);
 
         // A rising frame count is the only thing that distinguishes "presenting" from
         // "set up correctly and showing nothing", which look identical on screen.
@@ -157,7 +160,8 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
-            await LoadChannelsAsync(null);
+            UpdateModeButtons();
+            await LoadLibraryAsync(null);
         }
         catch (Exception exception)
         {
@@ -204,31 +208,95 @@ public sealed partial class MainWindow : Window
     private async Task<SqliteConnection> OpenAsync()
         => await new SqliteConnectionFactory(_databasePath).OpenAsync(CancellationToken.None);
 
-    private async Task LoadChannelsAsync(string? search)
+    /// <summary>Fills the list from whichever catalogue is selected.</summary>
+    /// <remarks>
+    /// Three queries rather than one union: live rows carry now/next and a progress bar,
+    /// films are grouped streams, and series are containers with no stream at all. They
+    /// share a row type for display but nothing at the storage layer.
+    /// </remarks>
+    private async Task LoadLibraryAsync(string? search)
     {
         await using var connection = await OpenAsync();
+        var term = string.IsNullOrWhiteSpace(search) ? null : search;
 
         var stopwatch = Stopwatch.StartNew();
-        var channels = await ChannelRepository.GetChannelsAsync(
-            connection,
-            new ChannelQuery { Search = string.IsNullOrWhiteSpace(search) ? null : search, Limit = 500 },
-            DateTimeOffset.UtcNow,
-            CancellationToken.None);
-        stopwatch.Stop();
-
         _rows.Clear();
-        _rows.AddRange(channels.Select(c => new ChannelRow(c)));
+        string summary;
+
+        switch (_mode)
+        {
+            case LibraryKind.Film:
+            {
+                var films = await LibraryRepository.GetFilmsAsync(
+                    connection,
+                    new CatalogueQuery { Search = term, Limit = 500 },
+                    CancellationToken.None);
+
+                foreach (var film in films)
+                {
+                    _rows.Add(LibraryRow.FromFilm(film));
+                }
+
+                // Counted only for the unfiltered view. The count scans the whole VOD
+                // table - 138ms over 158,255 rows even indexed - and repeating it per
+                // keystroke would double the cost of every search for a number nobody
+                // reads while typing.
+                summary = term is null
+                    ? $"{_rows.Count:N0} of {await LibraryRepository.CountFilmsAsync(connection, new CatalogueQuery(), CancellationToken.None):N0} films"
+                    : $"{_rows.Count:N0} films matching";
+                break;
+            }
+
+            case LibraryKind.Series:
+            {
+                var series = await LibraryRepository.GetSeriesAsync(
+                    connection,
+                    new CatalogueQuery { Search = term, Limit = 500 },
+                    CancellationToken.None);
+
+                foreach (var show in series)
+                {
+                    _rows.Add(LibraryRow.FromSeries(show));
+                }
+
+                summary = $"{_rows.Count:N0} series · newest first";
+                break;
+            }
+
+            default:
+            {
+                var channels = await ChannelRepository.GetChannelsAsync(
+                    connection,
+                    new ChannelQuery { Search = term, Limit = 500 },
+                    DateTimeOffset.UtcNow,
+                    CancellationToken.None);
+
+                var withGuide = 0;
+                foreach (var channel in channels)
+                {
+                    if (channel.NowTitle is not null)
+                    {
+                        withGuide++;
+                    }
+
+                    _rows.Add(LibraryRow.FromChannel(channel));
+                }
+
+                summary = $"{_rows.Count:N0} shown · {withGuide:N0} with guide";
+                break;
+            }
+        }
+
+        stopwatch.Stop();
 
         // Reassigning rather than mutating: ItemsRepeater does not observe a plain List,
         // and the slice does not yet need incremental loading.
         ChannelList.ItemsSource = null;
         ChannelList.ItemsSource = _rows;
 
-        var withGuide = _rows.Count(r => r.NowTitle is not null);
-        CountText.Text =
-            $"{_rows.Count:N0} shown · {withGuide:N0} with guide · query {stopwatch.ElapsedMilliseconds}ms";
+        CountText.Text = $"{summary} · query {stopwatch.ElapsedMilliseconds}ms";
 
-        if (string.IsNullOrWhiteSpace(search))
+        if (term is null)
         {
             LibraryText.Text = await DescribeLibraryAsync(connection);
         }
@@ -369,21 +437,77 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async void OnChannelClicked(object sender, RoutedEventArgs e)
+    private async void OnModeClicked(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: string channelKey })
+        if (sender is not Button { Tag: string tag } || !Enum.TryParse<LibraryKind>(tag, out var mode))
         {
             return;
         }
 
-        var row = _rows.Find(r => r.ChannelKey == channelKey);
-        if (row is not null)
+        if (mode == _mode)
         {
-            await PlayChannelAsync(row);
+            return;
+        }
+
+        _mode = mode;
+        UpdateModeButtons();
+
+        // The search term does not carry across catalogues: a term that matched channels
+        // usually matches nothing in a film catalogue, and an empty list on switching
+        // reads as a broken tab rather than an empty search.
+        _searchDebounce.Stop();
+        SearchBox.Text = string.Empty;
+
+        try
+        {
+            await LoadLibraryAsync(null);
+        }
+        catch (Exception exception)
+        {
+            Log($"catalogue load failed: {exception}");
+            CountText.Text = $"load failed: {exception.Message}";
         }
     }
 
-    private async Task PlayChannelAsync(ChannelRow row)
+    /// <summary>Marks the selected tab by disabling it.</summary>
+    /// <remarks>
+    /// A disabled button cannot be clicked again and reads as current without needing a
+    /// selection visual the slice has no style system for yet.
+    /// </remarks>
+    private void UpdateModeButtons()
+    {
+        LiveTab.IsEnabled = _mode != LibraryKind.Live;
+        FilmsTab.IsEnabled = _mode != LibraryKind.Film;
+        SeriesTab.IsEnabled = _mode != LibraryKind.Series;
+    }
+
+    private async void OnRowClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string key })
+        {
+            return;
+        }
+
+        var row = _rows.Find(r => r.Key == key);
+        if (row is null)
+        {
+            return;
+        }
+
+        if (!row.Playable)
+        {
+            // Series have no stream until their episodes are fetched, which sync skips
+            // deliberately: one request per series against 49,783 of them.
+            ChannelTitle.Text = row.Title;
+            ProgrammeTitle.Text = row.Subtitle;
+            StatusText.Text = "no episodes yet — series fetch is not wired up";
+            return;
+        }
+
+        await PlayAsync(row);
+    }
+
+    private async Task PlayAsync(LibraryRow row)
     {
         if (_handle is null)
         {
@@ -391,17 +515,20 @@ public sealed partial class MainWindow : Window
         }
 
         await using var connection = await OpenAsync();
+
+        // Same lookup for a film as for a channel: a film's key is a channel_key, so
+        // provider priority and quality ordering apply to both without a second path.
         var url = await ChannelRepository.GetPlaybackUrlAsync(
-            connection, row.ChannelKey, CancellationToken.None);
+            connection, row.Key, CancellationToken.None);
 
         if (url is null)
         {
-            StatusText.Text = "no playable stream for this channel";
+            StatusText.Text = "no playable stream for this entry";
             return;
         }
 
-        ChannelTitle.Text = row.DisplayName;
-        ProgrammeTitle.Text = row.NowLine;
+        ChannelTitle.Text = row.Title;
+        ProgrammeTitle.Text = row.Subtitle;
 
         if (!_swapChainAttached)
         {
