@@ -31,6 +31,7 @@ internal static class Program
                 "play" => await PlayAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "latency" => await LatencyAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "coverage" => await CoverageAsync(CancellationToken.None).ConfigureAwait(false),
+                "browse" => await BrowseAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -54,7 +55,51 @@ internal static class Program
         Console.WriteLine("  play [search]   Play a real stream and report decode diagnostics");
         Console.WriteLine("  latency [n]     Compare mpv option profiles for time-to-first-frame");
         Console.WriteLine("  coverage        Re-run EPG matching and report coverage; no network");
+        Console.WriteLine("  browse          Time the VOD and series catalogue queries; no network");
         return 1;
+    }
+
+    /// <summary>Times the catalogue queries against the real library.</summary>
+    /// <remarks>
+    /// A query that is fine on a fixture of ten rows can be unusable on 158,255. This is
+    /// the cheapest place to find that out.
+    /// </remarks>
+    private static async Task<int> BrowseAsync(CancellationToken cancellationToken)
+    {
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer", "harness.db");
+
+        var factory = new SqliteConnectionFactory(databasePath);
+        await using var connection = await factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        await TimeAsync("count films", async () =>
+             $"{await LibraryRepository.CountFilmsAsync(connection, new CatalogueQuery(), cancellationToken):N0} films").ConfigureAwait(false);
+
+        await TimeAsync("first page of films", async () =>
+             $"{(await LibraryRepository.GetFilmsAsync(connection, new CatalogueQuery { Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
+        await TimeAsync("deep page of films", async () =>
+             $"{(await LibraryRepository.GetFilmsAsync(connection, new CatalogueQuery { Limit = 100, Offset = 100_000 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
+        await TimeAsync("search films", async () =>
+             $"{(await LibraryRepository.GetFilmsAsync(connection, new CatalogueQuery { Search = "matrix", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
+        await TimeAsync("first page of series", async () =>
+             $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
+        await TimeAsync("search series", async () =>
+             $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Search = "the", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
+        return 0;
+    }
+
+    private static async Task TimeAsync(string label, Func<Task<string>> work)
+    {
+        var stopwatch = Stopwatch.StartNew();
+        var detail = await work().ConfigureAwait(false);
+        stopwatch.Stop();
+        Console.WriteLine($"  {label,-24} {stopwatch.ElapsedMilliseconds,6}ms   {detail}");
     }
 
     /// <summary>Re-runs EPG matching over the stored guide and reports coverage.</summary>
