@@ -129,6 +129,45 @@ public sealed class ProviderConnectionLimiter
         }
     }
 
+    /// <summary>
+    /// Takes a slot, waiting for one rather than refusing.
+    /// </summary>
+    /// <remarks>
+    /// For failover, where <see cref="TryAcquire"/> is the wrong shape. A stream that
+    /// fails 200ms after opening is still inside the minimum interval, so the fallback
+    /// would be refused and the user shown an error while a working alternative sat there
+    /// unused. A user clicking a channel still gets <see cref="TryAcquire"/>: silently
+    /// waiting on a click reads as a dead button, whereas failover has no button to be
+    /// dead and a spinner is the honest response.
+    /// <para>
+    /// Polled rather than signalled. Slot releases are rare and human-paced, and a
+    /// condition variable here would buy microseconds on a path already budgeted seconds.
+    /// </para>
+    /// </remarks>
+    public async Task<ConnectionLease> AcquireAsync(CancellationToken cancellationToken)
+    {
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            if (TryAcquire(out var lease))
+            {
+                return lease!;
+            }
+
+            // Zero means the refusal was the connection ceiling rather than the clock, and
+            // no amount of waiting on the clock will change that. Poll instead.
+            var wait = TimeUntilNextOpen;
+            await Task.Delay(
+                wait > TimeSpan.Zero ? wait : PollInterval,
+                _timeProvider,
+                cancellationToken).ConfigureAwait(false);
+        }
+    }
+
+    /// <summary>How often to re-check when waiting on a busy slot rather than the clock.</summary>
+    private static readonly TimeSpan PollInterval = TimeSpan.FromMilliseconds(100);
+
     internal void Release()
     {
         lock (_gate)

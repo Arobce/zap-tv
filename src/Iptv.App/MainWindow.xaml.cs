@@ -7,6 +7,7 @@ using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Iptv.Core.Data;
+using Iptv.Core.Playback;
 using Iptv.Core.Sources;
 using Iptv.Mpv;
 using Microsoft.Data.Sqlite;
@@ -100,6 +101,23 @@ public sealed partial class MainWindow : Window
 
     private ConnectionLease? _currentStream;
 
+    /// <summary>The failover plan for whatever is playing. Null when nothing is.</summary>
+    private FailoverSession? _session;
+
+    /// <summary>Whether the current attempt has produced a picture.</summary>
+    /// <remarks>
+    /// Frames presented, not mpv's own state. A stream that opens, negotiates and then
+    /// delivers nothing looks healthy to every property mpv exposes, and the whole point of
+    /// the check is to catch that.
+    /// </remarks>
+    private bool _firstFrameSeen;
+
+    private long _framesAtLastCheck;
+    private long _framesAtOpen;
+    private int _stallSeconds;
+    private readonly DispatcherQueueTimer _firstFrameDeadline;
+    private readonly DispatcherQueueTimer _stallWatch;
+
     public MainWindow()
     {
         InitializeComponent();
@@ -132,11 +150,38 @@ public sealed partial class MainWindow : Window
             Log($"heartbeat: frames={frames} loops={_presenter.LoopIterations} backend={_presenter.Backend} fault={_presenter.Fault?.Message ?? "none"}");
 
             var elapsed = _switchTimer is { } t ? $" · {t.ElapsedMilliseconds}ms" : string.Empty;
+            var provider = _session is { HasFailedOver: true, Current: { } current }
+                ? $" · via {current.ProviderName}"
+                : string.Empty;
+
             StatusText.Text = frames > 0
-                ? $"presenting · {frames:N0} frames{elapsed}"
+                ? $"presenting · {frames:N0} frames{elapsed}{provider}"
                 : $"no frames yet{elapsed}";
         };
         _heartbeat.Start();
+
+        // The PRD's two failure detectors. Both count presented frames rather than asking
+        // mpv how it is doing, because a stream that stops delivering while the demuxer
+        // keeps reconnecting reports itself as fine.
+        _firstFrameDeadline = DispatcherQueue.CreateTimer();
+        _firstFrameDeadline.Interval = TimeSpan.FromSeconds(4);
+        _firstFrameDeadline.IsRepeating = false;
+        _firstFrameDeadline.Tick += async (_, _) =>
+        {
+            if (_firstFrameSeen)
+            {
+                return;
+            }
+
+            await FailOverAsync(PlaybackOutcome.Timeout, "no first frame within 4s");
+        };
+
+        // 5s of no new frames after playback started. Sampled at 1s so the report is
+        // roughly when the picture froze rather than up to five seconds later.
+        _stallWatch = DispatcherQueue.CreateTimer();
+        _stallWatch.Interval = TimeSpan.FromSeconds(1);
+        _stallWatch.Tick += async (_, _) => await CheckForStallAsync();
+        _stallWatch.Start();
 
         Closed += OnClosed;
 
@@ -202,6 +247,63 @@ public sealed partial class MainWindow : Window
             Log($"player start failed: {exception}");
             StatusText.Text = $"player failed: {exception.Message}";
         }
+    }
+
+    /// <summary>Watches for a picture that has frozen while playback claims to continue.</summary>
+    /// <remarks>
+    /// Counts presented frames rather than reading <c>core-idle</c> and
+    /// <c>cache-buffering-state</c>. The demuxer is configured to reconnect, so a provider
+    /// that stops sending shows up as an endless healthy-looking reconnect loop while the
+    /// picture sits still. Frames are the thing the viewer actually sees stop.
+    /// </remarks>
+    private async Task CheckForStallAsync()
+    {
+        if (_presenter is null || _session?.Current is null)
+        {
+            _stallSeconds = 0;
+            return;
+        }
+
+        var frames = _presenter.FramesPresented;
+
+        if (!_firstFrameSeen)
+        {
+            // Compared against the count at open, not against zero. The presenter runs
+            // continuously across channel changes, so its total never resets and a new
+            // stream would otherwise inherit the previous one's success.
+            if (frames <= _framesAtOpen)
+            {
+                return;
+            }
+
+            _firstFrameSeen = true;
+            _firstFrameDeadline.Stop();
+            _framesAtLastCheck = frames;
+
+            var ttfb = _switchTimer is { } opened ? (int)opened.ElapsedMilliseconds : (int?)null;
+            Log($"first frame after {ttfb}ms on stream {_session.Current.StreamId}");
+
+            await using var connection = await OpenAsync();
+            await _session.ReportAsync(
+                connection, PlaybackOutcome.Ok, DateTimeOffset.UtcNow, CancellationToken.None, ttfb);
+            return;
+        }
+
+        if (frames != _framesAtLastCheck)
+        {
+            _framesAtLastCheck = frames;
+            _stallSeconds = 0;
+            return;
+        }
+
+        _stallSeconds++;
+        if (_stallSeconds < 5)
+        {
+            return;
+        }
+
+        _stallSeconds = 0;
+        await FailOverAsync(PlaybackOutcome.Stall, "no new frames for 5s during playback");
     }
 
     /// <summary>Opens a connection, applying the required pragmas.</summary>
@@ -394,15 +496,17 @@ public sealed partial class MainWindow : Window
         {
             switch (evt)
             {
-                // Reason 4 is an error, and it is the difference between "this channel is
-                // dead" and "the player is broken". Without it, both look like a black
-                // rectangle.
+                // Reason 4 is an error. It is now a failover trigger rather than a message:
+                // saying "channel may be dead" while three working providers carry the same
+                // channel is exactly what Phase 8 replaces.
                 case MpvEndFile end:
                     Log($"end-file reason={end.Reason} error={end.Error}");
                     if (end.Reason == 4)
                     {
-                        DispatcherQueue.TryEnqueue(() =>
-                            StatusText.Text = "stream failed to open (channel may be dead)");
+                        // Marshalled: this is the mpv event-loop thread, and the handler
+                        // touches XAML.
+                        DispatcherQueue.TryEnqueue(async () => await FailOverAsync(
+                            PlaybackOutcome.HttpError, $"mpv end-file error {end.Error}"));
                     }
 
                     break;
@@ -516,19 +620,24 @@ public sealed partial class MainWindow : Window
 
         await using var connection = await OpenAsync();
 
-        // Same lookup for a film as for a channel: a film's key is a channel_key, so
-        // provider priority and quality ordering apply to both without a second path.
-        var url = await ChannelRepository.GetPlaybackUrlAsync(
-            connection, row.Key, CancellationToken.None);
+        // Same plan for a film as for a channel: a film's key is a channel_key, so provider
+        // priority, reliability and the safety guard all apply without a second path.
+        var session = await FailoverSession.StartAsync(
+            connection, row.Key, DateTimeOffset.UtcNow, QualityPreference.Highest,
+            CancellationToken.None);
 
-        if (url is null)
+        foreach (var refused in session.Excluded)
         {
-            StatusText.Text = "no playable stream for this entry";
-            return;
+            Log($"failover excluded stream {refused.Candidate.StreamId}: {refused.Reason}");
         }
 
-        ChannelTitle.Text = row.Title;
-        ProgrammeTitle.Text = row.Subtitle;
+        if (session.Current is null)
+        {
+            StatusText.Text = session.Excluded.Count > 0
+                ? "no playable stream — every alternative was a different channel"
+                : "no playable stream for this entry";
+            return;
+        }
 
         if (!_swapChainAttached)
         {
@@ -536,28 +645,98 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        // Release the previous channel's slot before taking one for the new channel.
-        // loadfile replaces the stream anyway, but the accounting has to match reality or
-        // the limiter refuses every change after the first.
-        _currentStream?.Dispose();
-        _currentStream = null;
+        _session = session;
+        ChannelTitle.Text = row.Title;
+        ProgrammeTitle.Text = row.Subtitle;
 
-        if (!_connections.TryAcquire(out var lease))
+        await OpenCurrentAsync("opening...");
+    }
+
+    /// <summary>Opens whatever stream the session currently points at.</summary>
+    /// <remarks>
+    /// The single place a stream is opened, so the connection lease, the first-frame
+    /// deadline and the attempt timer cannot drift apart between the first attempt and a
+    /// failover.
+    /// </remarks>
+    private async Task OpenCurrentAsync(string status)
+    {
+        if (_handle is null || _session?.Current is not { } candidate)
         {
-            // Says why rather than doing nothing. A button that silently ignores a click
-            // is indistinguishable from a broken one, and the wait is short.
-            var wait = _connections.TimeUntilNextOpen;
-            StatusText.Text = $"easing off the provider — retry in {wait.TotalSeconds:F0}s";
-            Log($"channel change refused by limiter; {wait.TotalMilliseconds:F0}ms remaining");
             return;
         }
 
-        _currentStream = lease;
-        _switchTimer = Stopwatch.StartNew();
-        StatusText.Text = "opening...";
+        // Release the previous slot before taking one for the new stream. loadfile replaces
+        // the stream anyway, but the accounting has to match reality or the limiter refuses
+        // every change after the first.
+        _currentStream?.Dispose();
+        _currentStream = null;
 
-        Log($"loadfile {url}");
-        _handle.Command("loadfile", url);
+        // Waits rather than refuses. A stream that dies 200ms in is still inside the
+        // minimum interval, and refusing there would show an error while a working
+        // alternative sat unused.
+        try
+        {
+            _currentStream = await _connections.AcquireAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        _switchTimer = Stopwatch.StartNew();
+        _firstFrameSeen = false;
+        _stallSeconds = 0;
+        _framesAtOpen = _presenter?.FramesPresented ?? 0;
+        StatusText.Text = status;
+
+        // 4s, per the PRD. Restarted on every open so a failover gets the same budget as
+        // the first attempt rather than inheriting what is left of it.
+        _firstFrameDeadline.Stop();
+        _firstFrameDeadline.Start();
+
+        Log($"loadfile stream={candidate.StreamId} provider={candidate.ProviderName} attempt={_session.AttemptNumber}");
+        _handle.Command("loadfile", candidate.Url);
+    }
+
+    /// <summary>
+    /// Records how the current attempt ended and opens the next candidate if there is one.
+    /// </summary>
+    /// <remarks>
+    /// Always on the UI thread. mpv events arrive on the event-loop thread and this touches
+    /// XAML, which the conventions forbid from a callback thread.
+    /// </remarks>
+    private async Task FailOverAsync(PlaybackOutcome outcome, string detail)
+    {
+        if (_session is not { Current: { } failed })
+        {
+            return;
+        }
+
+        _firstFrameDeadline.Stop();
+
+        var elapsed = _switchTimer is { } timer ? (int)timer.ElapsedMilliseconds : (int?)null;
+        Log($"attempt failed: stream={failed.StreamId} outcome={outcome} after {elapsed}ms — {detail}");
+
+        await using var connection = await OpenAsync();
+        var next = await _session.ReportAsync(
+            connection,
+            outcome,
+            DateTimeOffset.UtcNow,
+            CancellationToken.None,
+            _firstFrameSeen ? elapsed : null,
+            detail);
+
+        if (next is null)
+        {
+            // Only now is it a hard error. Saying "dead channel" on the first failure when
+            // three providers remain is the behaviour the whole phase exists to replace.
+            _currentStream?.Dispose();
+            _currentStream = null;
+            StatusText.Text = $"all {_session.AttemptNumber} streams failed for this channel";
+            return;
+        }
+
+        await OpenCurrentAsync($"switching to {next.ProviderName}...");
     }
 
     /// <summary>Keeps the video surface matched to the panel.</summary>
@@ -591,6 +770,9 @@ public sealed partial class MainWindow : Window
     {
         _searchDebounce.Stop();
         _heartbeat.Stop();
+        _firstFrameDeadline.Stop();
+        _stallWatch.Stop();
+        _session = null;
 
         // Release the provider slot before anything else: the stream must be given back
         // even if teardown below throws.

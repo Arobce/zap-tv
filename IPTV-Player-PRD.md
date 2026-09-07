@@ -657,10 +657,18 @@ Candidate ordering: provider `priority`, then rolling 7-day success rate from `s
 Normalization deliberately collapses `US: ESPN` and `UK| ESPN` onto one `channel_key`, which means naive failover can silently play a completely different channel. That is worse than an error, because the user believes what the UI tells them.
 
 A candidate is only eligible when:
-- `channels.country` agrees, or is absent on both sides, **and**
+- the country agrees, or is absent on both sides, **and**
 - the `channel_key` was derived from `tvg_id`, or the candidate's `normalized_title` matches exactly.
 
 Fuzzy-derived keys are good enough for grouping in the UI and not good enough for silently substituting a stream. Candidates failing the guard are excluded and the exclusion is logged.
+
+**Amended after measurement** — see [0009](docs/decisions/0009-failover-guard-cost.md).
+
+The country comparison is against **the stream that will actually be opened**, not against `channels.country`. That column is one denormalized value for a key that may span several differently-titled streams, which is the exact case the guard is for; the anchor candidate's own country prefix is the accurate question. Where the two agree the result is identical.
+
+Measured on the reference library: the guard refuses 45.8% of alternative streams, all on country, and every refusal sampled was a genuinely different channel (Afghan vs Georgian 1TV; Ukrainian vs Russian 5 Kanal). 53.9% survive, so failover keeps something to work with across 3,625 channels. The title rule fires 19 times in 6,563 — rare, and exactly the `ESPN 2` / `ESPN2` collisions that are invisible until they happen.
+
+Failover must **wait** for a provider connection slot rather than being refused one. A stream that fails 19ms after opening is always inside the minimum interval between opens, so the refusing path would show an error while a working alternative sat unused. A user clicking a channel still gets the refusing path: silently waiting on a click reads as a dead button.
 
 Show a subtle non-blocking indicator when a failover occurs ("switched to Provider B"). Only surface a hard error after all candidates are exhausted.
 
@@ -670,6 +678,13 @@ Write every attempt to `stream_health`, subject to the Phase 1 retention policy.
 - Killing a stream mid-playback (block the host in the firewall) results in automatic recovery on another provider within 10s.
 - A fixture with two same-named channels from different countries produces no failover between them.
 - Diagnostics view shows accurate per-provider stats after a synthetic run.
+
+Status: the second is covered by unit tests. The first is proved offline by
+`dotnet run --project src/Iptv.Harness -- drill`, which drives real mpv from a dead URL to
+a working stream and recovers in 2,146ms — but against one provider, since the reference
+account is the only one configured. The literal firewall-kill form and cross-provider
+failover both need a second provider and remain unproved. The third has the data behind it
+(`StreamHealthRepository.GetProviderHealthAsync`) but no view yet; that belongs to Phase 9.
 
 ---
 

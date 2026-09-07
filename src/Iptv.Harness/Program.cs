@@ -32,6 +32,8 @@ internal static class Program
                 "latency" => await LatencyAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "coverage" => await CoverageAsync(CancellationToken.None).ConfigureAwait(false),
                 "browse" => await BrowseAsync(CancellationToken.None).ConfigureAwait(false),
+                "failover" => await FailoverSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
+                "drill" => await FailoverDrill.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -56,6 +58,8 @@ internal static class Program
         Console.WriteLine("  latency [n]     Compare mpv option profiles for time-to-first-frame");
         Console.WriteLine("  coverage        Re-run EPG matching and report coverage; no network");
         Console.WriteLine("  browse          Time the VOD and series catalogue queries; no network");
+        Console.WriteLine("  failover        Survey what the failover safety guard refuses; no network");
+        Console.WriteLine("  drill           Drive a real failover against a dead URL; no provider");
         return 1;
     }
 

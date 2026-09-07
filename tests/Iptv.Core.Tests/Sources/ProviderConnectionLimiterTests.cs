@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Iptv.Core.Sources;
 
 namespace Iptv.Core.Tests.Sources;
@@ -170,6 +171,66 @@ public sealed class ProviderConnectionLimiterTests
 
         Assert.Equal(3, granted);
         Assert.Equal(3, limiter.Active);
+    }
+
+    // AcquireAsync waits on a real clock. The fake above has no timer, so these use the
+    // system provider with short intervals - a few tens of milliseconds of real waiting,
+    // which is the cost of testing the thing that actually waits.
+
+    [Fact]
+    public async Task Acquiring_waits_out_the_interval_instead_of_refusing()
+    {
+        // The failover case: a stream that dies almost immediately is still inside the
+        // interval, and refusing there would show an error while a fallback sat unused.
+        var limiter = new ProviderConnectionLimiter(1, TimeSpan.FromMilliseconds(150));
+
+        Assert.True(limiter.TryAcquire(out var first));
+        first!.Dispose();
+
+        Assert.False(limiter.TryAcquire(out _));
+
+        var started = Stopwatch.StartNew();
+        using var second = await limiter.AcquireAsync(CancellationToken.None);
+        started.Stop();
+
+        // Lower bound only. That it waited out the interval is the behaviour under test;
+        // how long it took beyond that is the machine's business, and an upper bound here
+        // is a test that fails when the build is busy rather than when the code is wrong.
+        Assert.NotNull(second);
+        Assert.True(
+            started.ElapsedMilliseconds >= 100,
+            $"returned after {started.ElapsedMilliseconds}ms, which is inside the interval");
+    }
+
+    [Fact]
+    public async Task Acquiring_waits_for_a_busy_slot_to_be_released()
+    {
+        // No interval, so the only thing in the way is the connection ceiling. The clock
+        // will never clear that on its own - only a release will.
+        var limiter = new ProviderConnectionLimiter(1, TimeSpan.Zero);
+        Assert.True(limiter.TryAcquire(out var held));
+
+        var waiting = limiter.AcquireAsync(CancellationToken.None);
+        Assert.False(waiting.IsCompleted);
+
+        held!.Dispose();
+
+        using var acquired = await waiting.WaitAsync(TimeSpan.FromSeconds(30));
+        Assert.Equal(1, limiter.Active);
+    }
+
+    [Fact]
+    public async Task Acquiring_is_cancellable_while_waiting()
+    {
+        // Closing the window during a failover must not leave a task parked forever.
+        var limiter = new ProviderConnectionLimiter(1, TimeSpan.Zero);
+        Assert.True(limiter.TryAcquire(out _));
+
+        using var cancellation = new CancellationTokenSource();
+        var waiting = limiter.AcquireAsync(cancellation.Token);
+        await cancellation.CancelAsync();
+
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => waiting);
     }
 
     /// <summary>Deterministic clock, so interval tests do not sleep.</summary>
