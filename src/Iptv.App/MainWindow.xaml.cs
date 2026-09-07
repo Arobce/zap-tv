@@ -295,6 +295,11 @@ public sealed partial class MainWindow : Window
             Marshal.ThrowExceptionForHR(native.SetSwapChain(swapChain));
             _swapChainAttached = true;
 
+            // The swap chain must follow the panel. Without this it stays at whatever size
+            // the panel had at startup and the picture is stretched on every resize, which
+            // the PRD lists as a Phase 0.2 requirement.
+            VideoPanel.SizeChanged += OnVideoPanelSizeChanged;
+
             Log($"swap chain attached; backend={_presenter.Backend} detail={_presenter.BackendDetail}; panel {VideoPanel.ActualWidth}x{VideoPanel.ActualHeight}");
 
             StatusText.Text = $"ready · {_presenter.Backend} · {_presenter.BackendDetail}";
@@ -426,6 +431,25 @@ public sealed partial class MainWindow : Window
 
         Log($"loadfile {url}");
         _handle.Command("loadfile", url);
+    }
+
+    /// <summary>Keeps the video surface matched to the panel.</summary>
+    /// <remarks>
+    /// ActualWidth is in logical units; the swap chain wants physical pixels, so the
+    /// rasterization scale is applied. Skipping it leaves the video rendering at a
+    /// fraction of the panel size on any display above 100%, which looks like a soft or
+    /// blurry picture rather than a sizing bug.
+    /// </remarks>
+    private void OnVideoPanelSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var scale = VideoPanel.CompositionScaleX <= 0 ? 1.0 : VideoPanel.CompositionScaleX;
+        var scaleY = VideoPanel.CompositionScaleY <= 0 ? 1.0 : VideoPanel.CompositionScaleY;
+
+        var width = (int)Math.Round(e.NewSize.Width * scale);
+        var height = (int)Math.Round(e.NewSize.Height * scaleY);
+
+        _presenter?.Resize(width, height);
+        Log($"panel resized to {e.NewSize.Width:F0}x{e.NewSize.Height:F0} logical, {width}x{height} physical");
     }
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)

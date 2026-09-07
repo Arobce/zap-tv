@@ -20,13 +20,20 @@ namespace Iptv.Mpv;
 /// appears to work and produces intermittent tearing or a stale frame, which reads as a
 /// timing bug rather than a missing lock.
 /// </para>
+/// <para>
+/// The D3D device outlives any individual texture. <see cref="Resize"/> replaces the
+/// texture and its GL objects while keeping the device, because the swap chain is bound to
+/// that device: recreating it would leave the swap chain unable to receive a copy, and the
+/// failure is a cryptic <c>E_INVALIDARG</c> from <c>CopyResource</c> rather than anything
+/// naming the mismatch.
+/// </para>
 /// </remarks>
 public sealed class SharedVideoTarget : IDisposable
 {
     private readonly GlFunctions _gl;
     private readonly WglDxInterop _interop;
     private readonly IntPtr _interopDevice;
-    private readonly IntPtr[] _registered;
+    private readonly IntPtr[] _registered = [IntPtr.Zero];
 
     private ID3D11Device? _device;
     private ID3D11DeviceContext? _deviceContext;
@@ -38,32 +45,20 @@ public sealed class SharedVideoTarget : IDisposable
     private SharedVideoTarget(
         ID3D11Device device,
         ID3D11DeviceContext deviceContext,
-        ID3D11Texture2D texture,
         GlFunctions gl,
         WglDxInterop interop,
-        IntPtr interopDevice,
-        IntPtr registeredObject,
-        uint renderbuffer,
-        uint framebuffer,
-        int width,
-        int height)
+        IntPtr interopDevice)
     {
         _device = device;
         _deviceContext = deviceContext;
-        _texture = texture;
         _gl = gl;
         _interop = interop;
         _interopDevice = interopDevice;
-        _registered = [registeredObject];
-        _renderbuffer = renderbuffer;
-        _framebuffer = framebuffer;
-        Width = width;
-        Height = height;
     }
 
-    public int Width { get; }
+    public int Width { get; private set; }
 
-    public int Height { get; }
+    public int Height { get; private set; }
 
     /// <summary>The GL framebuffer to hand to <see cref="MpvOpenGlRenderer.Render"/>.</summary>
     public int Framebuffer => (int)_framebuffer;
@@ -76,9 +71,8 @@ public sealed class SharedVideoTarget : IDisposable
     /// The D3D11 device backing the shared texture.
     /// </summary>
     /// <remarks>
-    /// The swap chain must be created on this same device. A swap chain on a different
-    /// device cannot receive a copy from this texture, and the failure is a cryptic
-    /// E_INVALIDARG from CopyResource rather than anything naming the mismatch.
+    /// The swap chain must be created on this same device, and it stays valid across a
+    /// <see cref="Resize"/>.
     /// </remarks>
     public ID3D11Device Device =>
         _device ?? throw new ObjectDisposedException(nameof(SharedVideoTarget));
@@ -110,8 +104,6 @@ public sealed class SharedVideoTarget : IDisposable
                 "This driver does not expose WGL_NV_DX_interop2, so an OpenGL frame cannot be " +
                 "shared with Direct3D without a full readback. Use software rendering.");
 
-        // BGRA is what both the swap chain and mpv's output expect; a mismatch here shows
-        // up as swapped colour channels rather than an error.
         // Explicitly typed locals: the overload taking (out device, out context) is
         // ambiguous with the one taking (out device, out featureLevel) when both are var.
         FeatureLevel[] featureLevels = [FeatureLevel.Level_11_1, FeatureLevel.Level_11_0];
@@ -126,6 +118,58 @@ public sealed class SharedVideoTarget : IDisposable
             out device,
             out deviceContext).CheckError();
 
+        var interopDevice = interop.OpenDevice(device.NativePointer);
+        if (interopDevice == IntPtr.Zero)
+        {
+            deviceContext.Dispose();
+            device.Dispose();
+            throw new NotSupportedException(
+                "wglDXOpenDeviceNV failed for this D3D11 device. The GL and D3D devices must be " +
+                "on the same adapter.");
+        }
+
+        var target = new SharedVideoTarget(device, deviceContext, gl, interop, interopDevice);
+
+        try
+        {
+            target.AttachTexture(width, height);
+            return target;
+        }
+        catch
+        {
+            target.Dispose();
+            throw;
+        }
+    }
+
+    /// <summary>
+    /// Replaces the texture and its GL objects at a new size, keeping the D3D device.
+    /// </summary>
+    /// <remarks>
+    /// Must run on the thread holding the GL context. A no-op when the size is unchanged,
+    /// because a resize tears down and rebuilds a driver-side registration and window
+    /// dragging would otherwise do that on every mouse move.
+    /// </remarks>
+    public void Resize(int width, int height)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(width);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(height);
+
+        if (width == Width && height == Height)
+        {
+            return;
+        }
+
+        DetachTexture();
+        AttachTexture(width, height);
+    }
+
+    /// <summary>Creates the texture, registers it with GL, and builds the framebuffer.</summary>
+    private void AttachTexture(int width, int height)
+    {
+        // BGRA is what both the swap chain and mpv's output expect; a mismatch here shows
+        // up as swapped colour channels rather than an error.
         var description = new Texture2DDescription
         {
             Width = (uint)width,
@@ -140,66 +184,41 @@ public sealed class SharedVideoTarget : IDisposable
             MiscFlags = ResourceOptionFlags.Shared,
         };
 
-        var texture = device.CreateTexture2D(description);
+        _texture = _device!.CreateTexture2D(description);
+        _renderbuffer = _gl.GenRenderbuffer();
 
-        var interopDevice = interop.OpenDevice(device.NativePointer);
-        if (interopDevice == IntPtr.Zero)
-        {
-            texture.Dispose();
-            deviceContext.Dispose();
-            device.Dispose();
-            throw new NotSupportedException(
-                "wglDXOpenDeviceNV failed for this D3D11 device. The GL and D3D devices must be " +
-                "on the same adapter.");
-        }
-
-        var renderbuffer = gl.GenRenderbuffer();
-        var registered = interop.RegisterObject(
-            interopDevice,
-            texture.NativePointer,
-            renderbuffer,
+        _registered[0] = _interop.RegisterObject(
+            _interopDevice,
+            _texture.NativePointer,
+            _renderbuffer,
             GlFunctions.Renderbuffer,
             WglDxInterop.AccessWriteDiscard);
 
-        if (registered == IntPtr.Zero)
+        if (_registered[0] == IntPtr.Zero)
         {
-            gl.DeleteRenderbuffer(renderbuffer);
-            interop.CloseDevice(interopDevice);
-            texture.Dispose();
-            deviceContext.Dispose();
-            device.Dispose();
             throw new NotSupportedException("wglDXRegisterObjectNV failed for the shared texture.");
         }
 
-        var framebuffer = gl.GenFramebuffer();
+        _framebuffer = _gl.GenFramebuffer();
 
         // The renderbuffer has no storage until GL owns the shared object. Attaching and
-        // validating outside a lock reports GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT for a
-        // registration that is in fact perfectly good - the first thing this code did
-        // wrong, and a failure that looks like an unsupported driver rather than a
-        // sequencing mistake.
-        IntPtr[] objects = [registered];
-        var locked = interop.LockObjects(interopDevice, objects);
+        // validating outside a lock reports an incomplete attachment for a registration
+        // that is in fact perfectly good, which looks like an unsupported driver rather
+        // than a sequencing mistake.
+        var locked = _interop.LockObjects(_interopDevice, _registered);
 
         var complete = false;
         if (locked)
         {
-            gl.BindFramebuffer(framebuffer);
-            gl.AttachRenderbuffer(renderbuffer);
-            complete = gl.IsFramebufferComplete();
-            gl.BindFramebuffer(0);
-            interop.UnlockObjects(interopDevice, objects);
+            _gl.BindFramebuffer(_framebuffer);
+            _gl.AttachRenderbuffer(_renderbuffer);
+            complete = _gl.IsFramebufferComplete();
+            _gl.BindFramebuffer(0);
+            _interop.UnlockObjects(_interopDevice, _registered);
         }
 
         if (!complete)
         {
-            gl.DeleteFramebuffer(framebuffer);
-            interop.UnregisterObject(interopDevice, registered);
-            gl.DeleteRenderbuffer(renderbuffer);
-            interop.CloseDevice(interopDevice);
-            texture.Dispose();
-            deviceContext.Dispose();
-            device.Dispose();
             throw new NotSupportedException(
                 locked
                     ? "The shared framebuffer is incomplete even with the object locked, so this " +
@@ -208,9 +227,37 @@ public sealed class SharedVideoTarget : IDisposable
                       "validated.");
         }
 
-        return new SharedVideoTarget(
-            device, deviceContext, texture, gl, interop, interopDevice,
-            registered, renderbuffer, framebuffer, width, height);
+        Width = width;
+        Height = height;
+    }
+
+    /// <summary>Releases the texture and its GL objects, in reverse order of acquisition.</summary>
+    /// <remarks>
+    /// Unregistering before closing the interop device matters: the reverse order leaks the
+    /// registration inside the driver, which a short run will not reveal.
+    /// </remarks>
+    private void DetachTexture()
+    {
+        if (_framebuffer != 0)
+        {
+            _gl.DeleteFramebuffer(_framebuffer);
+            _framebuffer = 0;
+        }
+
+        if (_registered[0] != IntPtr.Zero)
+        {
+            _interop.UnregisterObject(_interopDevice, _registered[0]);
+            _registered[0] = IntPtr.Zero;
+        }
+
+        if (_renderbuffer != 0)
+        {
+            _gl.DeleteRenderbuffer(_renderbuffer);
+            _renderbuffer = 0;
+        }
+
+        _texture?.Dispose();
+        _texture = null;
     }
 
     /// <summary>
@@ -309,33 +356,13 @@ public sealed class SharedVideoTarget : IDisposable
 
         _disposed = true;
 
-        // Reverse order of acquisition. Closing the interop device before unregistering
-        // the object leaks the registration inside the driver, which survives a short run.
-        if (_framebuffer != 0)
-        {
-            _gl.DeleteFramebuffer(_framebuffer);
-            _framebuffer = 0;
-        }
-
-        if (_registered[0] != IntPtr.Zero)
-        {
-            _interop.UnregisterObject(_interopDevice, _registered[0]);
-            _registered[0] = IntPtr.Zero;
-        }
-
-        if (_renderbuffer != 0)
-        {
-            _gl.DeleteRenderbuffer(_renderbuffer);
-            _renderbuffer = 0;
-        }
+        DetachTexture();
 
         if (_interopDevice != IntPtr.Zero)
         {
             _interop.CloseDevice(_interopDevice);
         }
 
-        _texture?.Dispose();
-        _texture = null;
         _deviceContext?.Dispose();
         _deviceContext = null;
         _device?.Dispose();

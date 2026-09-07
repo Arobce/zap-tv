@@ -45,6 +45,8 @@ public sealed class VideoPresenter : IDisposable
     private IDXGISwapChain1? _swapChain;
     private long _framesPresented;
     private long _loopIterations;
+    private long _pendingSize;
+    private long _resizes;
 
     public VideoPresenter(MpvHandle handle, int width, int height)
     {
@@ -77,6 +79,12 @@ public sealed class VideoPresenter : IDisposable
 
     /// <summary>Raised on the render thread when it dies.</summary>
     public event EventHandler<Exception>? RenderThreadFaulted;
+
+    /// <summary>Resizes actually applied, for diagnostics.</summary>
+    public long Resizes => Interlocked.Read(ref _resizes);
+
+    /// <summary>The last resize failure, or null. Playback continues at the old size.</summary>
+    public Exception? ResizeFailed { get; private set; }
 
     /// <summary>Iterations of the present loop, whether or not a frame was ready.</summary>
     /// <remarks>
@@ -166,6 +174,29 @@ public sealed class VideoPresenter : IDisposable
         }
     }
 
+    /// <summary>
+    /// Requests a new surface size. Safe to call from the UI thread.
+    /// </summary>
+    /// <remarks>
+    /// The size is queued rather than applied here. Resizing touches the GL context, the
+    /// shared texture and the swap chain, all of which belong to the render thread, and
+    /// doing any of it from the UI thread is undefined rather than merely racy.
+    /// <para>
+    /// Coalescing to a single pending value matters: dragging a window edge produces a
+    /// resize per mouse move, and each one tears down and rebuilds a driver-side
+    /// registration.
+    /// </para>
+    /// </remarks>
+    public void Resize(int width, int height)
+    {
+        if (width <= 0 || height <= 0)
+        {
+            return;
+        }
+
+        Interlocked.Exchange(ref _pendingSize, ((long)width << 32) | (uint)height);
+    }
+
     private void Present(
         MpvOpenGlRenderer renderer,
         SharedVideoTarget target,
@@ -176,6 +207,8 @@ public sealed class VideoPresenter : IDisposable
         while (!token.IsCancellationRequested)
         {
             Interlocked.Increment(ref _loopIterations);
+
+            ApplyPendingResize(target, swapChain);
 
             if (!renderer.HasFrameReady())
             {
@@ -194,6 +227,47 @@ public sealed class VideoPresenter : IDisposable
             // rather than a copy.
             swapChain.Present(1, PresentFlags.None);
             Interlocked.Increment(ref _framesPresented);
+        }
+    }
+
+    /// <summary>
+    /// Applies a queued resize to the shared texture and the swap chain.
+    /// </summary>
+    /// <remarks>
+    /// Order matters. The shared texture is rebuilt first, then the swap chain's buffers,
+    /// and only then does the next frame copy between them. Resizing the swap chain while
+    /// a back buffer reference is alive fails outright, which is why the copy in the render
+    /// loop takes its reference inside a <c>using</c> rather than caching one.
+    /// <para>
+    /// A failure here is recorded and the old size kept, rather than killing playback: a
+    /// stretched picture is a far better outcome than a black one.
+    /// </para>
+    /// </remarks>
+    private void ApplyPendingResize(SharedVideoTarget target, IDXGISwapChain1 swapChain)
+    {
+        var packed = Interlocked.Exchange(ref _pendingSize, 0);
+        if (packed == 0)
+        {
+            return;
+        }
+
+        var width = (int)(packed >> 32);
+        var height = (int)(packed & 0xFFFFFFFF);
+
+        if (width == target.Width && height == target.Height)
+        {
+            return;
+        }
+
+        try
+        {
+            target.Resize(width, height);
+            swapChain.ResizeBuffers(0, (uint)width, (uint)height, Format.Unknown, SwapChainFlags.None);
+            Interlocked.Increment(ref _resizes);
+        }
+        catch (Exception exception)
+        {
+            ResizeFailed = exception;
         }
     }
 
