@@ -120,6 +120,36 @@ public sealed class LibraryRow
         };
     }
 
+    /// <summary>Something started and not finished.</summary>
+    /// <remarks>
+    /// Plays through the same route as the catalogue it came from: a film by its
+    /// <c>channel_key</c>, an episode by its own URL. The resume position itself is not
+    /// carried here — it is read at play time, so a row built minutes ago cannot resume to
+    /// a stale point.
+    /// </remarks>
+    public static LibraryRow FromContinueWatching(ContinueWatchingItem item)
+    {
+        ArgumentNullException.ThrowIfNull(item);
+
+        var left = TimeSpan.FromSeconds(item.PositionSeconds);
+        var position = left.TotalHours >= 1 ? $"{left:h\\:mm\\:ss}" : $"{left:mm\\:ss}";
+
+        var subtitle = item.Progress is not null
+            ? $"{position} of {TimeSpan.FromSeconds(item.DurationSeconds!.Value):h\\:mm\\:ss}"
+            : $"{position} in";
+
+        return new LibraryRow(
+            item.ContentKey,
+            item.Title,
+            subtitle,
+            item.IsEpisode ? LibraryKind.Episode : LibraryKind.Film,
+            playable: true)
+        {
+            ProgressPercent = (item.Progress ?? 0) * 100,
+            ProgressVisibility = item.Progress is null ? Visibility.Collapsed : Visibility.Visible,
+        };
+    }
+
     /// <summary>One season, inside an opened series.</summary>
     /// <remarks>
     /// Season 0 is what providers use for specials and for episodes whose season they did

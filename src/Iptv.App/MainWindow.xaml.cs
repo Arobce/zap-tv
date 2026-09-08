@@ -67,7 +67,13 @@ public sealed partial class MainWindow : Window
     private readonly List<LibraryRow> _rows = [];
 
     /// <summary>Which catalogue the list is showing.</summary>
-    private LibraryKind _mode = LibraryKind.Live;
+    /// <remarks>
+    /// Its own type rather than reusing <see cref="LibraryKind"/>. A view and a row kind
+    /// looked like the same thing while there were exactly three of each; favourites and
+    /// continue-watching are views over kinds that already exist, and conflating them
+    /// would mean inventing row kinds that no row ever has.
+    /// </remarks>
+    private LibraryView _mode = LibraryView.Live;
 
     private static void Log(string message)
     {
@@ -366,7 +372,7 @@ public sealed partial class MainWindow : Window
 
         switch (_mode)
         {
-            case LibraryKind.Film:
+            case LibraryView.Films:
             {
                 var films = await LibraryRepository.GetFilmsAsync(
                     connection,
@@ -388,7 +394,44 @@ public sealed partial class MainWindow : Window
                 break;
             }
 
-            case LibraryKind.Series:
+            case LibraryView.Favourites:
+            {
+                var channels = await ChannelRepository.GetChannelsAsync(
+                    connection,
+                    new ChannelQuery { Search = term, FavouritesOnly = true, Limit = 500 },
+                    DateTimeOffset.UtcNow,
+                    CancellationToken.None);
+
+                foreach (var channel in channels)
+                {
+                    _rows.Add(LibraryRow.FromChannel(channel));
+                }
+
+                // Says how to add one rather than showing an empty list. An empty
+                // favourites view with no explanation reads as broken.
+                summary = _rows.Count == 0
+                    ? "no favourites yet · press B while watching a channel"
+                    : $"{_rows.Count:N0} favourites";
+                break;
+            }
+
+            case LibraryView.Continue:
+            {
+                var unfinished = await PlaybackStateRepository.GetContinueWatchingItemsAsync(
+                    connection, 100, CancellationToken.None);
+
+                foreach (var item in unfinished)
+                {
+                    _rows.Add(LibraryRow.FromContinueWatching(item));
+                }
+
+                summary = _rows.Count == 0
+                    ? "nothing part-watched · films and episodes appear here"
+                    : $"{_rows.Count:N0} to finish";
+                break;
+            }
+
+            case LibraryView.Series:
             {
                 var series = await LibraryRepository.GetSeriesAsync(
                     connection,
@@ -601,7 +644,7 @@ public sealed partial class MainWindow : Window
 
     private async void OnModeClicked(object sender, RoutedEventArgs e)
     {
-        if (sender is not Button { Tag: string tag } || !Enum.TryParse<LibraryKind>(tag, out var mode))
+        if (sender is not Button { Tag: string tag } || !Enum.TryParse<LibraryView>(tag, out var mode))
         {
             return;
         }
@@ -645,9 +688,11 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private void UpdateModeButtons()
     {
-        LiveTab.IsEnabled = _mode != LibraryKind.Live;
-        FilmsTab.IsEnabled = _mode != LibraryKind.Film;
-        SeriesTab.IsEnabled = _mode != LibraryKind.Series;
+        LiveTab.IsEnabled = _mode != LibraryView.Live;
+        FilmsTab.IsEnabled = _mode != LibraryView.Films;
+        SeriesTab.IsEnabled = _mode != LibraryView.Series;
+        FavouritesTab.IsEnabled = _mode != LibraryView.Favourites;
+        ContinueTab.IsEnabled = _mode != LibraryView.Continue;
     }
 
     private async void OnRowClicked(object sender, RoutedEventArgs e)
@@ -1029,7 +1074,16 @@ public sealed partial class MainWindow : Window
         var session = await FailoverSession.StartAsync(
             connection,
             row.Key,
-            row.Kind == LibraryKind.Film ? StreamKind.Vod : StreamKind.Live,
+            // Episode reaches here from continue-watching, where the row was built from a
+            // stored position and carries no URL. Its channel_key is its ep: key, so the
+            // normal lookup works — but only if the kind is right, since that key exists
+            // solely on series_episode rows.
+            row.Kind switch
+            {
+                LibraryKind.Film => StreamKind.Vod,
+                LibraryKind.Episode => StreamKind.SeriesEpisode,
+                _ => StreamKind.Live,
+            },
             DateTimeOffset.UtcNow,
             QualityPreference.Highest,
             CancellationToken.None);
@@ -1067,7 +1121,9 @@ public sealed partial class MainWindow : Window
         // Films resume; live television does not. Clearing the key as well as the start
         // option matters, because both are sticky and a channel opened after a film would
         // otherwise inherit the film's position.
-        if (row.Kind == LibraryKind.Film)
+        // Episodes reach here only from continue-watching; opened from a season they take
+        // the URL path above. Either way they resume.
+        if (row.Kind is LibraryKind.Film or LibraryKind.Episode)
         {
             _resumeKey = row.Key;
 
@@ -1483,7 +1539,7 @@ public sealed partial class MainWindow : Window
         // Series have no categories to load: the provider publishes them but the series
         // table has no column to join them to, so the picker is emptied rather than left
         // showing the previous catalogue's.
-        if (_mode == LibraryKind.Series)
+        if (_mode is LibraryView.Series or LibraryView.Favourites or LibraryView.Continue)
         {
             _loadingCategories = true;
             CategoryBox.ItemsSource = null;
@@ -1494,7 +1550,7 @@ public sealed partial class MainWindow : Window
 
         var categories = await CategoryRepository.GetCategoriesAsync(
             connection,
-            _mode == LibraryKind.Film ? CategoryKind.Vod : CategoryKind.Live,
+            _mode == LibraryView.Films ? CategoryKind.Vod : CategoryKind.Live,
             CancellationToken.None);
 
         // "All categories" is a row rather than a cleared selection, because a ComboBox
