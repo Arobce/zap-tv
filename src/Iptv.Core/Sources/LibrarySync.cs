@@ -130,6 +130,12 @@ public static class LibrarySync
         progress?.Report(new SyncProgress { Stage = "series", Detail = $"storing {shows.Count:N0}..." });
         await SeriesSync.SyncAsync(connection, providerId, shows, cancellationToken).ConfigureAwait(false);
 
+        // The search index is external-content: it holds no data of its own and is empty
+        // until rebuilt. Done here rather than by triggers, which would put an index write
+        // on the bulk ingest path.
+        progress?.Report(new SyncProgress { Stage = "search", Detail = "building the index..." });
+        await SearchRepository.RebuildStreamIndexAsync(connection, cancellationToken).ConfigureAwait(false);
+
         total.Stop();
 
         return new LibrarySyncReport
