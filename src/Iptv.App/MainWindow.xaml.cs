@@ -237,9 +237,14 @@ public sealed partial class MainWindow : Window
     {
         try
         {
-            if (!File.Exists(_databasePath))
+            // First run, or a database with nothing configured. Opening straight to
+            // Providers rather than showing an empty channel list, which reads as a broken
+            // sync rather than as nothing set up yet.
+            if (!File.Exists(_databasePath) ||
+                (await Providers.ListAsync(CancellationToken.None)).Count == 0)
             {
-                LibraryText.Text = "No library. Run: dotnet run --project src/Iptv.Harness -- sync";
+                LibraryText.Text = "no providers yet";
+                await ShowProvidersAsync();
                 return;
             }
 
