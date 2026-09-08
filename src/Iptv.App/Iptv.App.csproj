@@ -34,6 +34,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Iptv.Core\Iptv.Core.csproj" />
     <ProjectReference Include="..\Iptv.Mpv\Iptv.Mpv.csproj" />
+    <ProjectReference Include="..\Iptv.Presentation\Iptv.Presentation.csproj" />
   </ItemGroup>
 
 </Project>
