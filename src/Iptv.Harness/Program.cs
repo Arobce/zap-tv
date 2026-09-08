@@ -39,6 +39,7 @@ internal static class Program
                 "kinds" => await KindLeakSurvey.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "rebuild" => await RebuildChannelsAsync(CancellationToken.None).ConfigureAwait(false),
                 "episodes" => await EpisodeProbe.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "guide" => await GuideSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -69,6 +70,7 @@ internal static class Program
         Console.WriteLine("  kinds [term]    Report live/VOD key collisions; no network");
         Console.WriteLine("  rebuild         Recompute channel names from live streams; no network");
         Console.WriteLine("  episodes [x]    Fetch one series episodes end to end, without the UI");
+        Console.WriteLine("  guide           Report the shape of the stored guide; no network");
         return 1;
     }
 
@@ -111,6 +113,34 @@ internal static class Program
 
         await TimeAsync("first page of series", async () =>
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
+        await TimeAsync("epg coverage span", async () =>
+        {
+            var (from, to) = await EpgGridRepository.GetCoverageAsync(connection, cancellationToken);
+            return from is null ? "no guide" : $"{from:yyyy-MM-dd HH:mm} to {to:yyyy-MM-dd HH:mm} (now {DateTimeOffset.UtcNow:yyyy-MM-dd HH:mm})";
+        }).ConfigureAwait(false);
+
+        await TimeAsync("mapped channels on air now", async () =>
+        {
+            await using var probe = connection.CreateCommand();
+            probe.CommandText =
+                """
+                SELECT count(DISTINCT m.channel_key)
+                FROM epg_map m
+                JOIN programmes p ON p.epg_channel_id = m.epg_channel_id
+                WHERE p.start_utc <= @at AND p.stop_utc > @at;
+                """;
+            probe.Parameters.AddWithValue("@at", DateTimeOffset.UtcNow.ToUnixTimeSeconds());
+            return $"{Convert.ToInt32(await probe.ExecuteScalarAsync(cancellationToken)):N0} channels";
+        }).ConfigureAwait(false);
+
+        var page = await GridPageAsync(connection, cancellationToken).ConfigureAwait(false);
+
+        await TimeAsync("epg window, 2h", async () =>
+             $"{(await EpgGridRepository.GetWindowAsync(connection, page, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(2), DateTimeOffset.UtcNow, cancellationToken)).Sum(r => r.Programmes.Count)} blocks").ConfigureAwait(false);
+
+        await TimeAsync("epg window, 24h", async () =>
+             $"{(await EpgGridRepository.GetWindowAsync(connection, page, DateTimeOffset.UtcNow, DateTimeOffset.UtcNow.AddHours(24), DateTimeOffset.UtcNow, cancellationToken)).Sum(r => r.Programmes.Count)} blocks").ConfigureAwait(false);
 
         await TimeAsync("search series", async () =>
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Search = "the", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
@@ -163,6 +193,24 @@ internal static class Program
         {
             Console.WriteLine("     " + reader.GetString(3));
         }
+    }
+
+    /// <summary>A realization window worth of mapped channels, as the grid would ask for.</summary>
+    private static async Task<IReadOnlyList<string>> GridPageAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT channel_key FROM epg_map ORDER BY channel_key LIMIT 60;";
+
+        var keys = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            keys.Add(reader.GetString(0));
+        }
+
+        return keys;
     }
 
     private static async Task TimeAsync(string label, Func<Task<string>> work)

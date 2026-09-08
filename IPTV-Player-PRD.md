@@ -714,7 +714,13 @@ Virtualize on **both axes**. Do not render the full timeline. Implement as a cus
 - Query the database per visible window (`WHERE epg_channel_id IN (...) AND stop_utc > @from AND start_utc < @to`), not by loading all programmes into memory.
 - Recycle block containers. Allocation per scroll frame must be near zero.
 
-Target: smooth scrolling at monitor refresh rate with 20k channels and a 14-day guide loaded.
+Target: smooth scrolling at monitor refresh rate with 20k channels and the whole stored guide loaded.
+
+**Amended after measurement** — see [0010](docs/decisions/0010-guide-horizon.md). The original target said "a 14-day guide", which was an assumption about providers rather than a measurement of one. The reference provider publishes roughly 2.7 days centred on the moment it is fetched, reaching about 24 hours ahead. The grid therefore bounds itself to `min(start_utc)`/`max(stop_utc)` rather than to a fixed horizon: offering a fortnight of columns would be offering thirteen days of blank.
+
+The guide is dense where it exists — 3,341 of 20,479 channels have a programme on air at any given moment, holding within 2.5% out to twelve hours — so the grid is worth building. The windowed query costs 3ms for a 60-channel, 2-hour rectangle against 164,661 programmes, so the horizontal window is re-read on scroll rather than cached.
+
+**Automatic EPG refresh is required, not optional.** A guide reaching 24 hours ahead is empty for anyone who opens the app two days after a sync. Measured on a two-day-old guide: 10 channels on air, falling to 0 within twelve hours, while coverage still reported 16.8% — because coverage counts channels with *any* guide and says nothing about whether it covers the time anyone is looking at. Report both numbers together.
 
 ### Lists
 
