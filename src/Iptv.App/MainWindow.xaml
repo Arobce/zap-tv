@@ -69,10 +69,17 @@
             <StackPanel Grid.Row="0" Padding="16,14" Spacing="10">
                 <!-- The accent's one guaranteed appearance. Everything else earns it by
                      being live, current or selected. -->
-                <TextBlock FontSize="21" FontWeight="Bold" Margin="0,0,0,2">
-                    <Run Text="ZAP" Foreground="{StaticResource ZapAccent}" />
-                    <Run Text="TV" Foreground="{StaticResource ZapText}" />
-                </TextBlock>
+                <Grid>
+                    <TextBlock FontSize="21" FontWeight="Bold" Margin="0,0,0,2">
+                        <Run Text="ZAP" Foreground="{StaticResource ZapAccent}" />
+                        <Run Text="TV" Foreground="{StaticResource ZapText}" />
+                    </TextBlock>
+                    <Button Content="Providers"
+                            HorizontalAlignment="Right"
+                            Padding="10,4"
+                            FontSize="12"
+                            Click="OnOpenProvidersClicked" />
+                </Grid>
 
                 <TextBlock x:Name="LibraryText"
                            Text="loading library..."
@@ -201,6 +208,82 @@
                            FontSize="12"
                            Foreground="{StaticResource ZapAccentDim}" />
             </Border>
+        </Grid>
+
+        <!--
+            Providers. Spans both columns and sits above everything, because on a first run
+            there is no library to be behind it and nothing else the user can usefully do.
+        -->
+        <Grid x:Name="ProvidersPanel"
+              Grid.ColumnSpan="2"
+              Background="{StaticResource ZapBackground}"
+              Visibility="Collapsed">
+            <ScrollViewer Padding="40,32">
+                <StackPanel MaxWidth="720" HorizontalAlignment="Left" Spacing="18">
+                    <TextBlock Text="Providers" FontSize="26" FontWeight="Bold"
+                               Foreground="{StaticResource ZapText}" />
+
+                    <TextBlock x:Name="ProvidersIntro"
+                               FontSize="13"
+                               TextWrapping="Wrap"
+                               Foreground="{StaticResource ZapTextDim}" />
+
+                    <ItemsRepeater x:Name="ProviderList">
+                        <ItemsRepeater.ItemTemplate>
+                            <DataTemplate x:DataType="vm:ProviderCard">
+                                <Border Background="{StaticResource ZapSurface}"
+                                        CornerRadius="6"
+                                        Padding="16,12"
+                                        Margin="0,0,0,8">
+                                    <StackPanel Spacing="8">
+                                        <TextBlock Text="{x:Bind Title}" FontSize="16" FontWeight="SemiBold"
+                                                   Foreground="{StaticResource ZapText}" />
+                                        <TextBlock Text="{x:Bind Detail}" FontSize="12"
+                                                   TextWrapping="Wrap"
+                                                   Foreground="{StaticResource ZapTextDim}" />
+
+                                        <StackPanel Orientation="Horizontal" Spacing="8">
+                                            <Button Content="Sync now" Click="OnSyncProviderClicked"
+                                                    Tag="{x:Bind Id}" Padding="12,6" />
+                                            <Button Content="{x:Bind EnableLabel}" Click="OnToggleProviderClicked"
+                                                    Tag="{x:Bind Id}" Padding="12,6" />
+                                            <Button Content="Remove" Click="OnDeleteProviderClicked"
+                                                    Tag="{x:Bind Id}" Padding="12,6" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsRepeater.ItemTemplate>
+                    </ItemsRepeater>
+
+                    <TextBlock Text="Add a provider" FontSize="18" FontWeight="SemiBold"
+                               Margin="0,8,0,0"
+                               Foreground="{StaticResource ZapText}" />
+
+                    <StackPanel Spacing="10">
+                        <TextBox x:Name="ProviderNameBox" Header="Name" PlaceholderText="My provider" />
+                        <TextBox x:Name="ProviderHostBox" Header="Host"
+                                 PlaceholderText="http://example.com:8080" />
+                        <TextBox x:Name="ProviderUserBox" Header="Username" />
+                        <PasswordBox x:Name="ProviderPassBox" Header="Password" />
+
+                        <StackPanel Orientation="Horizontal" Spacing="8">
+                            <!-- Test before Add, and to its left: the PRD wants Test to be
+                                 the first impression, and it explains rather than passing. -->
+                            <Button x:Name="TestProviderButton" Content="Test" Click="OnTestProviderClicked"
+                                    Padding="16,7" />
+                            <Button x:Name="AddProviderButton" Content="Add" Click="OnAddProviderClicked"
+                                    Padding="16,7" />
+                            <Button Content="Close" Click="OnCloseProvidersClicked" Padding="16,7" />
+                        </StackPanel>
+
+                        <TextBlock x:Name="ProviderResultText"
+                                   FontSize="13"
+                                   TextWrapping="Wrap"
+                                   Foreground="{StaticResource ZapAccent}" />
+                    </StackPanel>
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
     </Grid>
 </Window>
