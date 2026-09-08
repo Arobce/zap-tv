@@ -5,6 +5,13 @@
     xmlns:local="using:Iptv.App">
 
     <!--
+        ZapTV. Electric yellow on near-black: the accent is a live wire, so it is used
+        sparingly and only on things that are actually live, current or selected. Spreading
+        it across every surface would make the one place it matters invisible.
+
+        Named here rather than inline so the palette is one edit, not thirty.
+    -->
+    <!--
         Phase 6 vertical slice: one provider, the channel list, and playback. No EPG grid,
         no VOD, no settings. The PRD's advice is to use this as a TV for a week before
         starting the expensive UI work, because a harness proves throughput and tells you
@@ -18,16 +25,40 @@
         shortcuts only work while some child happens to be focused, which in practice
         means they work right after clicking a channel and never again.
     -->
+    <!-- Literal, not a StaticResource: this element owns the dictionary, and an attribute
+         on it is set before its own Resources have been parsed. -->
     <Grid x:Name="RootGrid"
-          Background="#FF101014"
+          Background="#FF12110D"
           IsTabStop="True"
           KeyDown="OnKeyDown">
+
+        <!--
+            On the root Grid, not the Window. A WinUI 3 Window is not a FrameworkElement
+            and has no Resources property, and putting them there fails the XAML compiler
+            with no message at all.
+        -->
+        <Grid.Resources>
+            <!-- Arc yellow. The brightest thing on screen, reserved for the accent. -->
+            <SolidColorBrush x:Key="ZapAccent" Color="#FFFFD21E" />
+            <SolidColorBrush x:Key="ZapAccentDim" Color="#FFB8951A" />
+
+            <!-- Warm-shifted neutrals. A true grey next to yellow reads as blue. -->
+            <SolidColorBrush x:Key="ZapBackground" Color="#FF12110D" />
+            <SolidColorBrush x:Key="ZapSurface" Color="#FF1A1813" />
+            <SolidColorBrush x:Key="ZapOverlay" Color="#B8000000" />
+
+            <SolidColorBrush x:Key="ZapText" Color="#FFF4F0E4" />
+            <SolidColorBrush x:Key="ZapTextDim" Color="#FF938D7C" />
+            <SolidColorBrush x:Key="ZapTextFaint" Color="#FF6B6659" />
+            <SolidColorBrush x:Key="ZapTrack" Color="#FF2E2A21" />
+        </Grid.Resources>
+
         <Grid.ColumnDefinitions>
             <ColumnDefinition x:Name="SidebarColumn" Width="380" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <Grid x:Name="Sidebar" Grid.Column="0" Background="#FF16161C">
+        <Grid x:Name="Sidebar" Grid.Column="0" Background="{StaticResource ZapSurface}">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
@@ -35,10 +66,17 @@
             </Grid.RowDefinitions>
 
             <StackPanel Grid.Row="0" Padding="16,14" Spacing="10">
+                <!-- The accent's one guaranteed appearance. Everything else earns it by
+                     being live, current or selected. -->
+                <TextBlock FontSize="21" FontWeight="Bold" Margin="0,0,0,2">
+                    <Run Text="ZAP" Foreground="{StaticResource ZapAccent}" />
+                    <Run Text="TV" Foreground="{StaticResource ZapText}" />
+                </TextBlock>
+
                 <TextBlock x:Name="LibraryText"
                            Text="loading library..."
                            FontSize="12"
-                           Foreground="#FF8A8A99" />
+                           Foreground="{StaticResource ZapTextDim}" />
 
                 <!-- Three catalogues, one list. Live, films and series differ enough in
                      shape to need separate queries but not separate views. -->
@@ -79,17 +117,17 @@
                                 <StackPanel Spacing="3">
                                     <TextBlock Text="{x:Bind Title}"
                                                FontSize="14"
-                                               Foreground="#FFEDEDF2"
+                                               Foreground="{StaticResource ZapText}"
                                                TextTrimming="CharacterEllipsis" />
                                     <TextBlock Text="{x:Bind Subtitle}"
                                                FontSize="11"
-                                               Foreground="#FF7E7E8F"
+                                               Foreground="{StaticResource ZapTextDim}"
                                                TextTrimming="CharacterEllipsis" />
                                     <ProgressBar Value="{x:Bind ProgressPercent}"
                                                  Maximum="100"
                                                  Height="2"
-                                                 Foreground="#FF4C8DFF"
-                                                 Background="#FF2A2A33"
+                                                 Foreground="{StaticResource ZapAccent}"
+                                                 Background="{StaticResource ZapTrack}"
                                                  Visibility="{x:Bind ProgressVisibility}" />
                                 </StackPanel>
                             </Button>
@@ -102,7 +140,7 @@
                        x:Name="CountText"
                        Padding="16,10"
                        FontSize="11"
-                       Foreground="#FF6A6A7A" />
+                       Foreground="{StaticResource ZapTextFaint}" />
         </Grid>
 
         <Grid Grid.Column="1">
@@ -111,7 +149,7 @@
             <!-- Auto-hiding overlay would come later; always visible in the slice. -->
             <Border x:Name="TitleOverlay"
                     VerticalAlignment="Top"
-                    Background="#B0000000"
+                    Background="{StaticResource ZapOverlay}"
                     Padding="20,14">
                 <StackPanel Spacing="2">
                     <TextBlock x:Name="ChannelTitle"
@@ -121,11 +159,11 @@
                                Foreground="White" />
                     <TextBlock x:Name="ProgrammeTitle"
                                FontSize="13"
-                               Foreground="#CCFFFFFF" />
+                               Foreground="{StaticResource ZapTextDim}" />
                     <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · M mute"
                                FontSize="11"
                                Margin="0,4,0,0"
-                               Foreground="#88FFFFFF" />
+                               Foreground="{StaticResource ZapTextFaint}" />
                 </StackPanel>
             </Border>
 
@@ -133,7 +171,7 @@
             <Border x:Name="ToastPanel"
                     VerticalAlignment="Center"
                     HorizontalAlignment="Center"
-                    Background="#C0000000"
+                    Background="{StaticResource ZapOverlay}"
                     CornerRadius="8"
                     Padding="28,18"
                     Visibility="Collapsed">
@@ -145,7 +183,7 @@
 
             <Border VerticalAlignment="Bottom"
                     HorizontalAlignment="Left"
-                    Background="#B0000000"
+                    Background="{StaticResource ZapOverlay}"
                     CornerRadius="6"
                     Padding="14,9"
                     Margin="16">
@@ -153,7 +191,7 @@
                            Text="idle"
                            FontFamily="Consolas"
                            FontSize="12"
-                           Foreground="#FF7FE08A" />
+                           Foreground="{StaticResource ZapAccentDim}" />
             </Border>
         </Grid>
     </Grid>

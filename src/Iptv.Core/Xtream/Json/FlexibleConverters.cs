@@ -212,3 +212,63 @@ public sealed class FlexibleStringConverter : JsonConverter<string?>
     public override void Write(Utf8JsonWriter writer, string? value, JsonSerializerOptions options)
         => writer.WriteStringValue(value);
 }
+
+/// <summary>
+/// Reads <c>get_series_info</c>'s <c>episodes</c>, which is an object keyed by season.
+/// </summary>
+/// <remarks>
+/// A series with no episodes comes back as <c>[]</c> rather than <c>{}</c> on several
+/// panels. That is a type mismatch, not an empty result, and the default dictionary
+/// converter throws on it — which would turn "this series has nothing" into an error the
+/// user sees as a broken app. Anything that is not an object reads as empty.
+/// </remarks>
+public sealed class LenientEpisodeMapConverter
+    : JsonConverter<IReadOnlyDictionary<string, IReadOnlyList<XtreamEpisode>>>
+{
+    public override IReadOnlyDictionary<string, IReadOnlyList<XtreamEpisode>> Read(
+        ref Utf8JsonReader reader,
+        Type typeToConvert,
+        JsonSerializerOptions options)
+    {
+        if (reader.TokenType != JsonTokenType.StartObject)
+        {
+            reader.Skip();
+            return new Dictionary<string, IReadOnlyList<XtreamEpisode>>();
+        }
+
+        var result = new Dictionary<string, IReadOnlyList<XtreamEpisode>>(StringComparer.Ordinal);
+
+        while (reader.Read() && reader.TokenType != JsonTokenType.EndObject)
+        {
+            if (reader.TokenType != JsonTokenType.PropertyName)
+            {
+                continue;
+            }
+
+            var season = reader.GetString() ?? string.Empty;
+            reader.Read();
+
+            if (reader.TokenType != JsonTokenType.StartArray)
+            {
+                // A season whose value is not a list of episodes. Skipped rather than
+                // failing the whole series for one malformed entry.
+                reader.Skip();
+                continue;
+            }
+
+            var episodes = JsonSerializer.Deserialize<List<XtreamEpisode>>(ref reader, options);
+            if (episodes is { Count: > 0 })
+            {
+                result[season] = episodes;
+            }
+        }
+
+        return result;
+    }
+
+    public override void Write(
+        Utf8JsonWriter writer,
+        IReadOnlyDictionary<string, IReadOnlyList<XtreamEpisode>> value,
+        JsonSerializerOptions options)
+        => throw new NotSupportedException("Read-only: the app never sends this shape.");
+}

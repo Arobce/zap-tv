@@ -282,3 +282,62 @@ public sealed record XtreamSeries
         init => _seasons = value;
     }
 }
+
+/// <summary>One episode from <c>get_series_info</c>.</summary>
+public sealed record XtreamEpisode
+{
+    /// <summary>The id the playback URL is built from. A string on most panels.</summary>
+    [JsonPropertyName("id")]
+    [JsonConverter(typeof(FlexibleInt64Converter))]
+    public long Id { get; init; }
+
+    [JsonPropertyName("episode_num")]
+    [JsonConverter(typeof(FlexibleNullableInt32Converter))]
+    public int? EpisodeNum { get; init; }
+
+    [JsonPropertyName("season")]
+    [JsonConverter(typeof(FlexibleNullableInt32Converter))]
+    public int? Season { get; init; }
+
+    [JsonPropertyName("title")]
+    public string? Title { get; init; }
+
+    [JsonPropertyName("container_extension")]
+    public string? ContainerExtension { get; init; }
+
+    [JsonPropertyName("info")]
+    public XtreamEpisodeInfo? Info { get; init; }
+}
+
+/// <summary>The nested metadata block on an episode.</summary>
+public sealed record XtreamEpisodeInfo
+{
+    [JsonPropertyName("plot")]
+    public string? Plot { get; init; }
+
+    [JsonPropertyName("duration_secs")]
+    [JsonConverter(typeof(FlexibleNullableInt32Converter))]
+    public int? DurationSecs { get; init; }
+
+    [JsonPropertyName("movie_image")]
+    public string? Image { get; init; }
+}
+
+/// <summary>
+/// The <c>get_series_info</c> response.
+/// </summary>
+/// <remarks>
+/// <c>episodes</c> is an object keyed by season number, not an array — <c>{"1": [...],
+/// "2": [...]}</c> — so it deserializes to a dictionary. Some panels key it by a string
+/// and some by a number; JSON object keys are always strings, so this is one shape either
+/// way. A panel that has no episodes at all sends an empty array rather than an empty
+/// object, which is a type mismatch and not merely an empty result, so the property is
+/// read leniently.
+/// </remarks>
+public sealed record XtreamSeriesInfo
+{
+    [JsonPropertyName("episodes")]
+    [JsonConverter(typeof(LenientEpisodeMapConverter))]
+    public IReadOnlyDictionary<string, IReadOnlyList<XtreamEpisode>> Episodes { get; init; }
+        = new Dictionary<string, IReadOnlyList<XtreamEpisode>>();
+}
