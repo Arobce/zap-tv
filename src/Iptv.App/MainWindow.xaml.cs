@@ -346,6 +346,8 @@ public sealed partial class MainWindow : Window
         // Leaving an opened series: a search or a reload is a request for the catalogue,
         // not for the episode list that happens to be showing.
         _openSeries = null;
+        _openSeason = null;
+        _openEpisodes = [];
 
         await using var connection = await OpenAsync();
         var term = string.IsNullOrWhiteSpace(search) ? null : search;
@@ -664,6 +666,12 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            if (row.Kind == LibraryKind.Season)
+            {
+                OpenSeason(row);
+                return;
+            }
+
             if (row.Playable)
             {
                 await PlayAsync(row);
@@ -679,6 +687,16 @@ public sealed partial class MainWindow : Window
 
     /// <summary>The series currently drilled into, or null when showing a catalogue.</summary>
     private LibraryRow? _openSeries;
+
+    /// <summary>Every episode of the opened series, across all seasons.</summary>
+    private IReadOnlyList<EpisodeRecord> _openEpisodes = [];
+
+    /// <summary>The season being shown, or null while the season list itself is showing.</summary>
+    private int? _openSeason;
+
+    /// <summary>Whether the opened series has a season level to step back to.</summary>
+    private bool HasSeveralSeasons
+        => _openEpisodes.Select(e => e.SeasonNumber).Distinct().Take(2).Count() > 1;
 
     /// <summary>
     /// Shows one series' episodes, fetching them from the provider if needed.
@@ -706,7 +724,56 @@ public sealed partial class MainWindow : Window
             episodes = await FetchEpisodesAsync(connection, row);
         }
 
-        ShowEpisodes(episodes);
+        // Held so stepping back from a season does not refetch, and so the season list can
+        // be rebuilt without another database read.
+        _openEpisodes = episodes;
+
+        var seasons = episodes.Select(e => e.SeasonNumber).Distinct().ToList();
+
+        // One season is not a menu. Making the user click "Season 1" to reach the only
+        // season there is adds a step and tells them nothing.
+        if (seasons.Count <= 1)
+        {
+            _openSeason = seasons.Count == 1 ? seasons[0] : null;
+            ShowEpisodes(episodes);
+            return;
+        }
+
+        ShowSeasons(episodes);
+    }
+
+    /// <summary>Lists the seasons of the opened series.</summary>
+    private void ShowSeasons(IReadOnlyList<EpisodeRecord> episodes)
+    {
+        _openSeason = null;
+        _rows.Clear();
+
+        // Grouped in order, and specials last: providers put unsorted episodes in season 0,
+        // and sorting numerically would open every show on its odds and ends.
+        var seasons = episodes
+            .GroupBy(e => e.SeasonNumber)
+            .OrderBy(g => g.Key <= 0)
+            .ThenBy(g => g.Key);
+
+        foreach (var season in seasons)
+        {
+            _rows.Add(LibraryRow.FromSeason(season.Key, season.Count()));
+        }
+
+        _playingIndex = -1;
+        ChannelList.ItemsSource = null;
+        ChannelList.ItemsSource = _rows;
+
+        CountText.Text = $"{_rows.Count} seasons · {episodes.Count:N0} episodes · Esc to go back";
+    }
+
+    /// <summary>Shows one season's episodes.</summary>
+    private void OpenSeason(LibraryRow row)
+    {
+        _openSeason = row.SeasonNumber;
+
+        ProgrammeTitle.Text = row.Title;
+        ShowEpisodes(_openEpisodes.Where(e => e.SeasonNumber == row.SeasonNumber).ToList());
     }
 
     /// <summary>Asks the provider for a series' episodes and stores them.</summary>
@@ -826,15 +893,20 @@ public sealed partial class MainWindow : Window
         ChannelList.ItemsSource = null;
         ChannelList.ItemsSource = _rows;
 
+        // Says where Escape goes, because with two levels "go back" is ambiguous.
+        var back = HasSeveralSeasons ? "Esc for seasons" : "Esc for the series list";
+
         CountText.Text = episodes.Count == 0
             ? "no episodes — Esc or the Series tab to go back"
-            : $"{episodes.Count:N0} episodes · Esc to go back";
+            : $"{episodes.Count:N0} episodes · {back}";
     }
 
     /// <summary>Leaves an opened series and returns to the catalogue.</summary>
     private async Task CloseSeriesAsync()
     {
         _openSeries = null;
+        _openSeason = null;
+        _openEpisodes = [];
         await LoadLibraryAsync(SearchBox.Text);
     }
 
@@ -1071,6 +1143,13 @@ public sealed partial class MainWindow : Window
                 if (_fullScreen)
                 {
                     SetFullScreen(false);
+                }
+                else if (_openSeason is not null && HasSeveralSeasons)
+                {
+                    // Back to the season list, not out of the series. Escape unwinds one
+                    // level; a series with one season has no level here to unwind to.
+                    ProgrammeTitle.Text = "series";
+                    ShowSeasons(_openEpisodes);
                 }
                 else if (_openSeries is not null)
                 {
