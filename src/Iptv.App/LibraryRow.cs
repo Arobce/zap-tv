@@ -11,7 +11,10 @@ public enum LibraryKind
     Film,
     Series,
 
-    /// <summary>One episode inside an opened series.</summary>
+    /// <summary>One season inside an opened series.</summary>
+    Season,
+
+    /// <summary>One episode inside an opened season.</summary>
     Episode,
 }
 
@@ -55,6 +58,9 @@ public sealed class LibraryRow
 
     /// <summary>The <c>series.id</c> to fetch episodes for. Zero unless this is a series.</summary>
     public long SeriesRowId { get; private init; }
+
+    /// <summary>Which season this row selects. Meaningful only for a season row.</summary>
+    public int SeasonNumber { get; private init; }
 
     /// <summary>An episode plays from its own URL rather than a channel_key lookup.</summary>
     /// <remarks>
@@ -111,6 +117,26 @@ public sealed class LibraryRow
             playable: false)
         {
             SeriesRowId = item.SeriesRowId,
+        };
+    }
+
+    /// <summary>One season, inside an opened series.</summary>
+    /// <remarks>
+    /// Season 0 is what providers use for specials and for episodes whose season they did
+    /// not record. Labelling it "Season 0" would be technically right and useless.
+    /// </remarks>
+    public static LibraryRow FromSeason(int seasonNumber, int episodeCount)
+    {
+        var title = seasonNumber <= 0 ? "Specials & unsorted" : $"Season {seasonNumber}";
+
+        return new LibraryRow(
+            $"season:{seasonNumber}",
+            title,
+            episodeCount == 1 ? "1 episode" : $"{episodeCount:N0} episodes",
+            LibraryKind.Season,
+            playable: false)
+        {
+            SeasonNumber = seasonNumber,
         };
     }
 

@@ -41,10 +41,22 @@ internal static class EpisodeProbe
 
         Console.WriteLine($"  loaded, host {credentials.BaseUrl}");
 
-        var series = await LibraryRepository.GetSeriesAsync(
+        var matches = await LibraryRepository.GetSeriesAsync(
             connection,
-            new CatalogueQuery { Search = search, Limit = 1 },
+            new CatalogueQuery { Search = search, Limit = 12 },
             cancellationToken).ConfigureAwait(false);
+
+        // Listed before fetching, because "one season" can mean the show has one or that
+        // the provider files each season as its own series entry, and only the titles say
+        // which. Listing costs nothing; fetching costs a provider request each.
+        Console.WriteLine();
+        Console.WriteLine($"== matches for '{search ?? "(any)"}' ==");
+        foreach (var match in matches)
+        {
+            Console.WriteLine($"  {match.Title}");
+        }
+
+        var series = matches.Take(1).ToList();
 
         if (series.Count == 0)
         {
