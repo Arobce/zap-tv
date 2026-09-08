@@ -19,7 +19,11 @@ public sealed class TempDatabase : IAsyncDisposable
     {
         _directory = Path.Combine(Path.GetTempPath(), $"iptv-test-{Guid.NewGuid():N}");
         Path_ = Path.Combine(_directory, "library.db");
-        Factory = new SqliteConnectionFactory(Path_);
+
+        // Unpooled, so disposing a connection releases the file handle and this database
+        // can be deleted without ClearAllPools. See the remark on the factory: that call
+        // is global, and xunit runs test classes in parallel.
+        Factory = new SqliteConnectionFactory(Path_, pooled: false);
     }
 
     public string Path_ { get; }
@@ -31,10 +35,9 @@ public sealed class TempDatabase : IAsyncDisposable
 
     public async ValueTask DisposeAsync()
     {
-        // Pooled connections keep the file handle open, which makes the delete fail on
-        // Windows. Clearing the pool is the documented way to release them.
-        SqliteConnection.ClearAllPools();
-
+        // No ClearAllPools here. It is global, and clearing pools while another test class
+        // is mid-query against its own database made unrelated tests fail about one run in
+        // six. Pooling is off for this factory instead, so there is nothing to clear.
         await Task.Yield();
 
         try

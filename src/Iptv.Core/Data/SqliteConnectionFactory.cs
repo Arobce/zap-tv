@@ -40,7 +40,18 @@ public sealed class SqliteConnectionFactory
 
     private readonly string _connectionString;
 
-    public SqliteConnectionFactory(string databasePath)
+    /// <param name="pooled">
+    /// Whether connections may be pooled.
+    /// </param>
+    /// <remarks>
+    /// False exists for tests. Releasing a pooled connection leaves the file handle open,
+    /// so a temporary database cannot be deleted, and the documented remedy —
+    /// <c>SqliteConnection.ClearAllPools</c> — is global: called while another test is
+    /// running in parallel, it reaches into that test's database too. That produced
+    /// intermittent failures in unrelated tests roughly one run in six. Turning pooling off
+    /// removes the need for the global call rather than trying to time it.
+    /// </remarks>
+    public SqliteConnectionFactory(string databasePath, bool pooled = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(databasePath);
 
@@ -49,6 +60,7 @@ public sealed class SqliteConnectionFactory
         {
             DataSource = DatabasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
+            Pooling = pooled,
         }.ToString();
     }
 
