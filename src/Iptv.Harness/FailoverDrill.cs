@@ -50,7 +50,7 @@ internal static class FailoverDrill
             await SeedAsync(connection, cancellationToken).ConfigureAwait(false);
 
             var session = await FailoverSession.StartAsync(
-                connection, "tvg:drill", DateTimeOffset.UtcNow, QualityPreference.Highest,
+                connection, "tvg:drill", StreamKind.Live, DateTimeOffset.UtcNow, QualityPreference.Highest,
                 cancellationToken).ConfigureAwait(false);
 
             Console.WriteLine("== plan ==");

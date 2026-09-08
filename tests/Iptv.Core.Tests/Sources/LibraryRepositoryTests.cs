@@ -153,9 +153,10 @@ public sealed class LibraryRepositoryTests
         var film = Assert.Single(await LibraryRepository.GetFilmsAsync(
             connection, new CatalogueQuery(), CancellationToken.None));
 
-        // The same key the live path uses, so playback and resume go through one route.
+        // The same key the live path uses, so playback and resume go through one route -
+        // but scoped to the kind, because a live channel of the same name shares that key.
         var url = await ChannelRepository.GetPlaybackUrlAsync(
-            connection, film.Key, CancellationToken.None);
+            connection, film.Key, StreamKind.Vod, CancellationToken.None);
 
         Assert.NotNull(url);
         Assert.Contains("/movie/", url, StringComparison.Ordinal);

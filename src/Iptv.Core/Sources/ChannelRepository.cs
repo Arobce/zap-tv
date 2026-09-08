@@ -160,9 +160,19 @@ public static class ChannelRepository
     /// list and walks it on failure.
     /// </para>
     /// </remarks>
+    /// <param name="kind">
+    /// Which catalogue the key was taken from.
+    /// </param>
+    /// <remarks>
+    /// Required, not optional. <c>channel_key</c> comes from the normalized title alone,
+    /// so a film and a live channel of the same name share one, and without the kind this
+    /// query would happily answer a film with a live stream's URL — the user clicks a
+    /// movie and gets a television channel.
+    /// </remarks>
     public static async Task<string?> GetPlaybackUrlAsync(
         SqliteConnection connection,
         string channelKey,
+        StreamKind kind,
         CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(connection);
@@ -175,6 +185,7 @@ public static class ChannelRepository
             FROM streams s
             JOIN providers pr ON pr.id = s.provider_id
             WHERE s.channel_key = @key
+              AND s.kind = @kind
               AND s.is_active = 1
               AND s.is_separator = 0
               AND pr.enabled = 1
@@ -192,12 +203,22 @@ public static class ChannelRepository
             """;
 
         command.Parameters.AddWithValue("@key", channelKey);
+        command.Parameters.AddWithValue("@kind", StreamKindStorage(kind));
 
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value as string;
     }
 
     /// <summary>How far through the current programme, or null when there is none.</summary>
+    /// <summary>The stored spelling of a kind. Renaming one is a migration.</summary>
+    internal static string StreamKindStorage(StreamKind kind) => kind switch
+    {
+        StreamKind.Live => "live",
+        StreamKind.Vod => "vod",
+        StreamKind.SeriesEpisode => "series_episode",
+        _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "unmapped stream kind"),
+    };
+
     private static double? Progress(SqliteDataReader reader, long at)
     {
         if (reader.IsDBNull(5) || reader.IsDBNull(6))

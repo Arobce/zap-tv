@@ -106,7 +106,7 @@ public sealed class StreamHealthRepositoryTests
         await AddStreamAsync(connection, 3, "ESPN via disabled");
 
         var candidates = await StreamHealthRepository.GetCandidatesAsync(
-            connection, "tvg:espn.us", Now, CancellationToken.None);
+            connection, "tvg:espn.us", StreamKind.Live, Now, CancellationToken.None);
 
         Assert.Equal(live, Assert.Single(candidates).StreamId);
     }
@@ -119,7 +119,7 @@ public sealed class StreamHealthRepositoryTests
         await AddStreamAsync(connection, 1, "ESPN");
 
         var candidate = Assert.Single(await StreamHealthRepository.GetCandidatesAsync(
-            connection, "tvg:espn.us", Now, CancellationToken.None));
+            connection, "tvg:espn.us", StreamKind.Live, Now, CancellationToken.None));
 
         Assert.Equal(0, candidate.Attempts);
         Assert.Equal(0, candidate.Successes);
@@ -141,7 +141,7 @@ public sealed class StreamHealthRepositoryTests
         await RecordAsync(connection, stream, PlaybackOutcome.Ok, TimeSpan.FromDays(8));
 
         var candidate = Assert.Single(await StreamHealthRepository.GetCandidatesAsync(
-            connection, "tvg:espn.us", Now, CancellationToken.None));
+            connection, "tvg:espn.us", StreamKind.Live, Now, CancellationToken.None));
 
         Assert.Equal(2, candidate.Attempts);
         Assert.Equal(1, candidate.Successes);
@@ -157,7 +157,7 @@ public sealed class StreamHealthRepositoryTests
         await AddStreamAsync(connection, 2, "UK| ESPN");
 
         var candidates = await StreamHealthRepository.GetCandidatesAsync(
-            connection, "tvg:espn.us", Now, CancellationToken.None);
+            connection, "tvg:espn.us", StreamKind.Live, Now, CancellationToken.None);
 
         Assert.Equal(["UK", "US"], candidates.Select(c => c.Country).Order());
     }
@@ -175,7 +175,7 @@ public sealed class StreamHealthRepositoryTests
         await RecordAsync(connection, fallback, PlaybackOutcome.Ok, TimeSpan.FromHours(1));
 
         var plan = await StreamHealthRepository.PlanAsync(
-            connection, "tvg:espn.us", Now, QualityPreference.Highest, CancellationToken.None);
+            connection, "tvg:espn.us", StreamKind.Live, Now, QualityPreference.Highest, CancellationToken.None);
 
         Assert.Equal([primary, fallback], plan.Candidates.Select(c => c.StreamId));
     }

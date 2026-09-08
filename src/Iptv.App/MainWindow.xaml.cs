@@ -430,10 +430,18 @@ public sealed partial class MainWindow : Window
     private static async Task<string> DescribeLibraryAsync(SqliteConnection connection)
     {
         await using var command = connection.CreateCommand();
+        // Channels backed by a live stream, not every row in the table. VOD keys have
+        // channels rows too - the same key derivation serves both - and counting those
+        // reported 118,763 channels above a list that has 20,479 in it.
         command.CommandText =
             """
             SELECT
-              (SELECT count(*) FROM channels),
+              (SELECT count(*) FROM channels c
+                WHERE EXISTS (SELECT 1 FROM streams s
+                               WHERE s.channel_key = c.channel_key
+                                 AND s.kind = 'live'
+                                 AND s.is_active = 1
+                                 AND s.is_separator = 0)),
               (SELECT count(*) FROM epg_map),
               (SELECT count(*) FROM programmes);
             """;
@@ -663,7 +671,11 @@ public sealed partial class MainWindow : Window
         // Same plan for a film as for a channel: a film's key is a channel_key, so provider
         // priority, reliability and the safety guard all apply without a second path.
         var session = await FailoverSession.StartAsync(
-            connection, row.Key, DateTimeOffset.UtcNow, QualityPreference.Highest,
+            connection,
+            row.Key,
+            row.Kind == LibraryKind.Film ? StreamKind.Vod : StreamKind.Live,
+            DateTimeOffset.UtcNow,
+            QualityPreference.Highest,
             CancellationToken.None);
 
         foreach (var refused in session.Excluded)

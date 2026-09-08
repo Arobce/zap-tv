@@ -1,3 +1,4 @@
+using Iptv.Core.Sources;
 using Iptv.Core.Data;
 using Iptv.Core.Playback;
 using Microsoft.Data.Sqlite;
@@ -53,7 +54,7 @@ internal static class FailoverSurvey
         foreach (var key in keys)
         {
             var plan = await StreamHealthRepository.PlanAsync(
-                connection, key, now, QualityPreference.Highest, cancellationToken).ConfigureAwait(false);
+                connection, key, StreamKind.Live, now, QualityPreference.Highest, cancellationToken).ConfigureAwait(false);
 
             totalAlternatives += plan.Candidates.Count - 1 + plan.Excluded.Count;
             acceptedAlternatives += plan.Candidates.Count - 1;
