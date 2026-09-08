@@ -28,6 +28,7 @@
   </ItemGroup>
 
   <ItemGroup Label="Logging">
+    <PackageVersion Include="CommunityToolkit.Mvvm" Version="8.4.0" />
     <PackageVersion Include="Serilog" Version="4.3.0" />
     <PackageVersion Include="Serilog.Sinks.File" Version="7.0.0" />
     <PackageVersion Include="Serilog.Sinks.Console" Version="6.0.0" />

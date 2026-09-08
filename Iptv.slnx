@@ -6,9 +6,11 @@
     <Project Path="src/Iptv.Core/Iptv.Core.csproj" />
     <Project Path="src/Iptv.Harness/Iptv.Harness.csproj" />
     <Project Path="src/Iptv.Mpv/Iptv.Mpv.csproj" />
+    <Project Path="src/Iptv.Presentation/Iptv.Presentation.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Iptv.Core.Tests/Iptv.Core.Tests.csproj" />
     <Project Path="tests/Iptv.Mpv.Tests/Iptv.Mpv.Tests.csproj" />
+    <Project Path="tests/Iptv.Presentation.Tests/Iptv.Presentation.Tests.csproj" />
   </Folder>
 </Solution>

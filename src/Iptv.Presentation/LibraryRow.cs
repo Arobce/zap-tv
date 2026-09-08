@@ -1,8 +1,6 @@
-using System;
 using Iptv.Core.Sources;
-using Microsoft.UI.Xaml;
 
-namespace Iptv.App;
+namespace Iptv.Presentation;
 
 /// <summary>Which catalogue a row came from.</summary>
 public enum LibraryKind
@@ -22,10 +20,17 @@ public enum LibraryKind
 /// One row of the library list, whatever catalogue it came from.
 /// </summary>
 /// <remarks>
-/// One type for all three so the list has a single template. The presentation decisions
+/// <para>
+/// One type for every list so the view needs a single template. The presentation decisions
 /// live here rather than in XAML converters, because the awkward cases differ per kind and
-/// are easier to see together: most live channels have no guide, and no series can be
-/// played until its episodes are fetched.
+/// are easier to see together: most live channels have no guide, a series cannot be played
+/// at all, and a part-watched film needs its position in words.
+/// </para>
+/// <para>
+/// No <c>Visibility</c>. That type is XAML's, and depending on it would drag this whole
+/// layer back into a project that cannot be tested without the Windows workload. The view
+/// converts <see cref="ShowProgress"/> at the binding.
+/// </para>
 /// </remarks>
 public sealed class LibraryRow
 {
@@ -42,7 +47,7 @@ public sealed class LibraryRow
 
     public string Title { get; }
 
-    /// <summary>Now/next for a channel, container or year for a film, status for a series.</summary>
+    /// <summary>Now/next for a channel, a length for a film, a position for a resume.</summary>
     public string Subtitle { get; }
 
     public LibraryKind Kind { get; }
@@ -51,8 +56,8 @@ public sealed class LibraryRow
     /// Whether clicking this row can start playback.
     /// </summary>
     /// <remarks>
-    /// False for series: sync stores the listing but not the episodes, because fetching
-    /// them means one request per series and the reference provider lists 49,783.
+    /// False for a series and a season: both are containers. Opening one lists what is
+    /// inside it rather than playing anything.
     /// </remarks>
     public bool Playable { get; }
 
@@ -62,36 +67,41 @@ public sealed class LibraryRow
     /// <summary>Which season this row selects. Meaningful only for a season row.</summary>
     public int SeasonNumber { get; private init; }
 
-    /// <summary>An episode plays from its own URL rather than a channel_key lookup.</summary>
+    /// <summary>An episode opened from a season plays from its own URL.</summary>
     /// <remarks>
-    /// Episodes are fetched on demand and stored, but the row is built from what was just
-    /// fetched, so carrying the URL avoids a round trip through the database to read back
-    /// what is already in hand.
+    /// Null for an episode reached from continue-watching, which was built from a stored
+    /// position rather than from a fetch, and so goes through the <c>channel_key</c> lookup.
     /// </remarks>
     public string? EpisodeUrl { get; private init; }
 
     public double ProgressPercent { get; private init; }
 
-    /// <summary>Hidden rather than zero-width when there is no programme to measure.</summary>
-    public Visibility ProgressVisibility { get; private init; } = Visibility.Collapsed;
+    /// <summary>Whether there is a measured position worth drawing a bar for.</summary>
+    public bool ShowProgress { get; private init; }
 
     public static LibraryRow FromChannel(ChannelListItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        // Explicit rather than blank. "No guide data" is information; an empty line is
-        // just a hole, and it is the majority case on this library.
-        var subtitle = item.NowTitle is null
-            ? "no guide data"
-            : item.NextTitle is null
-                ? item.NowTitle
-                : $"{item.NowTitle}  →  {item.NextTitle}";
+        // Explicit rather than blank. "No guide data" is information; an empty line is just
+        // a hole, and it is the majority case on this library.
+        var subtitle = Describe(item);
 
         return new LibraryRow(item.ChannelKey, item.DisplayName, subtitle, LibraryKind.Live, playable: true)
         {
             ProgressPercent = (item.NowProgress ?? 0) * 100,
-            ProgressVisibility = item.NowProgress is null ? Visibility.Collapsed : Visibility.Visible,
+            ShowProgress = item.NowProgress is not null,
         };
+    }
+
+    private static string Describe(ChannelListItem item)
+    {
+        if (item.NowTitle is null)
+        {
+            return "no guide data";
+        }
+
+        return item.NextTitle is null ? item.NowTitle : $"{item.NowTitle}  →  {item.NextTitle}";
     }
 
     public static LibraryRow FromFilm(CatalogueItem item)
@@ -106,8 +116,6 @@ public sealed class LibraryRow
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        // Not playable itself: a series is a container. Clicking it opens the episode list,
-        // which is one provider request rather than the 49,783 a bulk fetch would be.
         var year = item.Year is { } y ? $"{y} · " : string.Empty;
         return new LibraryRow(
             item.Key,
@@ -122,20 +130,17 @@ public sealed class LibraryRow
 
     /// <summary>Something started and not finished.</summary>
     /// <remarks>
-    /// Plays through the same route as the catalogue it came from: a film by its
-    /// <c>channel_key</c>, an episode by its own URL. The resume position itself is not
-    /// carried here — it is read at play time, so a row built minutes ago cannot resume to
-    /// a stale point.
+    /// The resume position is not carried here. It is read at play time, so a row built
+    /// minutes ago cannot resume to a point that has since moved.
     /// </remarks>
     public static LibraryRow FromContinueWatching(ContinueWatchingItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        var left = TimeSpan.FromSeconds(item.PositionSeconds);
-        var position = left.TotalHours >= 1 ? $"{left:h\\:mm\\:ss}" : $"{left:mm\\:ss}";
+        var position = Clock(item.PositionSeconds);
 
-        var subtitle = item.Progress is not null
-            ? $"{position} of {TimeSpan.FromSeconds(item.DurationSeconds!.Value):h\\:mm\\:ss}"
+        var subtitle = item.DurationSeconds is > 0
+            ? $"{position} of {Clock(item.DurationSeconds.Value)}"
             : $"{position} in";
 
         return new LibraryRow(
@@ -146,7 +151,7 @@ public sealed class LibraryRow
             playable: true)
         {
             ProgressPercent = (item.Progress ?? 0) * 100,
-            ProgressVisibility = item.Progress is null ? Visibility.Collapsed : Visibility.Visible,
+            ShowProgress = item.Progress is not null,
         };
     }
 
@@ -170,23 +175,28 @@ public sealed class LibraryRow
         };
     }
 
-    /// <summary>One episode, inside an opened series.</summary>
+    /// <summary>One episode, inside an opened season.</summary>
     public static LibraryRow FromEpisode(EpisodeRecord episode)
     {
         ArgumentNullException.ThrowIfNull(episode);
-
-        var label = $"S{episode.SeasonNumber:00}E{episode.EpisodeNumber:00}";
 
         // The number is the subtitle, not a prefix on the title. Prefixing makes every row
         // start with the same shape and pushes the actual name out of a narrow list.
         return new LibraryRow(
             $"ep:{episode.ProviderEpisodeId}",
             episode.Title,
-            label,
+            $"S{episode.SeasonNumber:00}E{episode.EpisodeNumber:00}",
             LibraryKind.Episode,
             playable: true)
         {
             EpisodeUrl = episode.Url,
         };
+    }
+
+    /// <summary>Whole seconds as h:mm:ss, dropping the hour when there is none.</summary>
+    private static string Clock(int seconds)
+    {
+        var span = TimeSpan.FromSeconds(seconds);
+        return span.TotalHours >= 1 ? $"{span:h\\:mm\\:ss}" : $"{span:mm\\:ss}";
     }
 }

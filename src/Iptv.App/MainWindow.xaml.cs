@@ -1,3 +1,4 @@
+using Iptv.Presentation;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -73,7 +74,7 @@ public sealed partial class MainWindow : Window
     /// continue-watching are views over kinds that already exist, and conflating them
     /// would mean inventing row kinds that no row ever has.
     /// </remarks>
-    private LibraryView _mode = LibraryView.Live;
+    private readonly LibraryBrowser _browser;
 
     private static void Log(string message)
     {
@@ -146,6 +147,10 @@ public sealed partial class MainWindow : Window
         // shorter reissues the query mid-keystroke for no benefit.
         _searchDebounce = DispatcherQueue.CreateTimer();
         _searchDebounce.Interval = TimeSpan.FromMilliseconds(80);
+        _browser = new LibraryBrowser(
+            new SqliteConnectionFactory(_databasePath),
+            (seriesRowId, _) => FetchEpisodesAsync(seriesRowId));
+
         _searchDebounce.IsRepeating = false;
         _searchDebounce.Tick += async (_, _) => await LoadLibraryAsync(SearchBox.Text);
 
@@ -239,13 +244,8 @@ public sealed partial class MainWindow : Window
             }
 
             UpdateModeButtons();
-
-            await using (var connection = await OpenAsync())
-            {
-                await LoadCategoriesAsync(connection);
-            }
-
-            await LoadLibraryAsync(null);
+            await LoadCategoriesAsync();
+            await ApplyAsync(await _browser.LoadAsync(CancellationToken.None));
         }
         catch (Exception exception)
         {
@@ -349,141 +349,38 @@ public sealed partial class MainWindow : Window
     private async Task<SqliteConnection> OpenAsync()
         => await new SqliteConnectionFactory(_databasePath).OpenAsync(CancellationToken.None);
 
-    /// <summary>Fills the list from whichever catalogue is selected.</summary>
+    /// <summary>Fills the list from whatever the browser currently points at.</summary>
     /// <remarks>
-    /// Three queries rather than one union: live rows carry now/next and a progress bar,
-    /// films are grouped streams, and series are containers with no stream at all. They
-    /// share a row type for display but nothing at the storage layer.
+    /// The queries, the summaries and the navigation rules moved to
+    /// <see cref="LibraryBrowser"/>, where they are tested. What is left here is the part
+    /// that genuinely needs the window: pushing rows at the repeater and writing the
+    /// status lines.
     /// </remarks>
-    private async Task LoadLibraryAsync(string? search)
+    private async Task ApplyAsync(BrowseResult result)
     {
-        // Leaving an opened series: a search or a reload is a request for the catalogue,
-        // not for the episode list that happens to be showing.
-        _openSeries = null;
-        _openSeason = null;
-        _openEpisodes = [];
-
-        await using var connection = await OpenAsync();
-        var term = string.IsNullOrWhiteSpace(search) ? null : search;
-
-        var stopwatch = Stopwatch.StartNew();
         _rows.Clear();
-        string summary;
-
-        switch (_mode)
-        {
-            case LibraryView.Films:
-            {
-                var films = await LibraryRepository.GetFilmsAsync(
-                    connection,
-                    new CatalogueQuery { Search = term, Category = _category, Limit = 500 },
-                    CancellationToken.None);
-
-                foreach (var film in films)
-                {
-                    _rows.Add(LibraryRow.FromFilm(film));
-                }
-
-                // Counted only for the unfiltered view. The count scans the whole VOD
-                // table - 138ms over 158,255 rows even indexed - and repeating it per
-                // keystroke would double the cost of every search for a number nobody
-                // reads while typing.
-                summary = term is null
-                    ? $"{_rows.Count:N0} of {await LibraryRepository.CountFilmsAsync(connection, new CatalogueQuery { Category = _category }, CancellationToken.None):N0} films"
-                    : $"{_rows.Count:N0} films matching";
-                break;
-            }
-
-            case LibraryView.Favourites:
-            {
-                var channels = await ChannelRepository.GetChannelsAsync(
-                    connection,
-                    new ChannelQuery { Search = term, FavouritesOnly = true, Limit = 500 },
-                    DateTimeOffset.UtcNow,
-                    CancellationToken.None);
-
-                foreach (var channel in channels)
-                {
-                    _rows.Add(LibraryRow.FromChannel(channel));
-                }
-
-                // Says how to add one rather than showing an empty list. An empty
-                // favourites view with no explanation reads as broken.
-                summary = _rows.Count == 0
-                    ? "no favourites yet · press B while watching a channel"
-                    : $"{_rows.Count:N0} favourites";
-                break;
-            }
-
-            case LibraryView.Continue:
-            {
-                var unfinished = await PlaybackStateRepository.GetContinueWatchingItemsAsync(
-                    connection, 100, CancellationToken.None);
-
-                foreach (var item in unfinished)
-                {
-                    _rows.Add(LibraryRow.FromContinueWatching(item));
-                }
-
-                summary = _rows.Count == 0
-                    ? "nothing part-watched · films and episodes appear here"
-                    : $"{_rows.Count:N0} to finish";
-                break;
-            }
-
-            case LibraryView.Series:
-            {
-                var series = await LibraryRepository.GetSeriesAsync(
-                    connection,
-                    new CatalogueQuery { Search = term, Limit = 500 },
-                    CancellationToken.None);
-
-                foreach (var show in series)
-                {
-                    _rows.Add(LibraryRow.FromSeries(show));
-                }
-
-                summary = $"{_rows.Count:N0} series · newest first";
-                break;
-            }
-
-            default:
-            {
-                var channels = await ChannelRepository.GetChannelsAsync(
-                    connection,
-                    new ChannelQuery { Search = term, Category = _category, Limit = 500 },
-                    DateTimeOffset.UtcNow,
-                    CancellationToken.None);
-
-                var withGuide = 0;
-                foreach (var channel in channels)
-                {
-                    if (channel.NowTitle is not null)
-                    {
-                        withGuide++;
-                    }
-
-                    _rows.Add(LibraryRow.FromChannel(channel));
-                }
-
-                summary = $"{_rows.Count:N0} shown · {withGuide:N0} with guide";
-                break;
-            }
-        }
-
-        stopwatch.Stop();
+        _rows.AddRange(result.Rows);
+        _playingIndex = -1;
 
         // Reassigning rather than mutating: ItemsRepeater does not observe a plain List,
         // and the slice does not yet need incremental loading.
         ChannelList.ItemsSource = null;
         ChannelList.ItemsSource = _rows;
 
-        CountText.Text = $"{summary} · query {stopwatch.ElapsedMilliseconds}ms";
+        CountText.Text = result.Summary;
 
-        if (term is null)
+        if (result.Level == BrowseLevel.Catalogue && _browser.Search is null)
         {
+            await using var connection = await OpenAsync();
             LibraryText.Text = await DescribeLibraryAsync(connection);
         }
+    }
+
+    /// <summary>Loads the current catalogue and shows it.</summary>
+    private async Task LoadLibraryAsync(string? search)
+    {
+        var result = await _browser.SetSearchAsync(search, CancellationToken.None);
+        await ApplyAsync(result);
     }
 
     private static async Task<string> DescribeLibraryAsync(SqliteConnection connection)
@@ -649,30 +546,25 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (mode == _mode)
+        if (mode == _browser.View)
         {
             return;
         }
 
-        _mode = mode;
-        _category = null;
-        _openSeries = null;
-        UpdateModeButtons();
-
-        // The search term does not carry across catalogues: a term that matched channels
-        // usually matches nothing in a film catalogue, and an empty list on switching
-        // reads as a broken tab rather than an empty search.
+        // Cleared before the load, not after: the browser clears its own search, and
+        // leaving text in the box would show a term that is not being applied.
         _searchDebounce.Stop();
+        _suppressSearch = true;
         SearchBox.Text = string.Empty;
+        _suppressSearch = false;
 
         try
         {
-            await using (var connection = await OpenAsync())
-            {
-                await LoadCategoriesAsync(connection);
-            }
+            var result = await _browser.SwitchViewAsync(mode, CancellationToken.None);
 
-            await LoadLibraryAsync(null);
+            UpdateModeButtons();
+            await LoadCategoriesAsync();
+            await ApplyAsync(result);
         }
         catch (Exception exception)
         {
@@ -688,11 +580,11 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private void UpdateModeButtons()
     {
-        LiveTab.IsEnabled = _mode != LibraryView.Live;
-        FilmsTab.IsEnabled = _mode != LibraryView.Films;
-        SeriesTab.IsEnabled = _mode != LibraryView.Series;
-        FavouritesTab.IsEnabled = _mode != LibraryView.Favourites;
-        ContinueTab.IsEnabled = _mode != LibraryView.Continue;
+        LiveTab.IsEnabled = _browser.View != LibraryView.Live;
+        FilmsTab.IsEnabled = _browser.View != LibraryView.Films;
+        SeriesTab.IsEnabled = _browser.View != LibraryView.Series;
+        FavouritesTab.IsEnabled = _browser.View != LibraryView.Favourites;
+        ContinueTab.IsEnabled = _browser.View != LibraryView.Continue;
     }
 
     private async void OnRowClicked(object sender, RoutedEventArgs e)
@@ -721,7 +613,7 @@ public sealed partial class MainWindow : Window
 
             if (row.Kind == LibraryKind.Season)
             {
-                OpenSeason(row);
+                await OpenSeasonAsync(row);
                 return;
             }
 
@@ -738,108 +630,36 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    /// <summary>The series currently drilled into, or null when showing a catalogue.</summary>
-    private LibraryRow? _openSeries;
-
-    /// <summary>Every episode of the opened series, across all seasons.</summary>
-    private IReadOnlyList<EpisodeRecord> _openEpisodes = [];
-
-    /// <summary>The season being shown, or null while the season list itself is showing.</summary>
-    private int? _openSeason;
-
-    /// <summary>Whether the opened series has a season level to step back to.</summary>
-    private bool HasSeveralSeasons
-        => _openEpisodes.Select(e => e.SeasonNumber).Distinct().Take(2).Count() > 1;
-
-    /// <summary>
-    /// Shows one series' episodes, fetching them from the provider if needed.
-    /// </summary>
-    /// <remarks>
-    /// One request, for a series the user asked for. Sync deliberately does not fetch
-    /// episodes: <c>get_series_info</c> is per series and the reference provider lists
-    /// 49,783, so a bulk fetch is 49,783 requests on a one-connection account.
-    /// </remarks>
+    /// <summary>Opens a series, showing seasons or episodes as the browser decides.</summary>
     private async Task OpenSeriesAsync(LibraryRow row)
     {
-        await using var connection = await OpenAsync();
-
         Log($"opening series {row.Title} (row {row.SeriesRowId})");
-        _openSeries = row;
+
         ChannelTitle.Text = row.Title;
         ProgrammeTitle.Text = "series";
+        CountText.Text = "fetching episodes...";
 
-        var episodes = await EpisodeSync.GetEpisodesAsync(
-            connection, row.SeriesRowId, CancellationToken.None);
-
-        if (episodes.Count == 0)
-        {
-            CountText.Text = "fetching episodes...";
-            episodes = await FetchEpisodesAsync(connection, row);
-        }
-
-        // Held so stepping back from a season does not refetch, and so the season list can
-        // be rebuilt without another database read.
-        _openEpisodes = episodes;
-
-        var seasons = episodes.Select(e => e.SeasonNumber).Distinct().ToList();
-
-        // One season is not a menu. Making the user click "Season 1" to reach the only
-        // season there is adds a step and tells them nothing.
-        if (seasons.Count <= 1)
-        {
-            _openSeason = seasons.Count == 1 ? seasons[0] : null;
-            ShowEpisodes(episodes);
-            return;
-        }
-
-        ShowSeasons(episodes);
-    }
-
-    /// <summary>Lists the seasons of the opened series.</summary>
-    private void ShowSeasons(IReadOnlyList<EpisodeRecord> episodes)
-    {
-        _openSeason = null;
-        _rows.Clear();
-
-        // Grouped in order, and specials last: providers put unsorted episodes in season 0,
-        // and sorting numerically would open every show on its odds and ends.
-        var seasons = episodes
-            .GroupBy(e => e.SeasonNumber)
-            .OrderBy(g => g.Key <= 0)
-            .ThenBy(g => g.Key);
-
-        foreach (var season in seasons)
-        {
-            _rows.Add(LibraryRow.FromSeason(season.Key, season.Count()));
-        }
-
-        _playingIndex = -1;
-        ChannelList.ItemsSource = null;
-        ChannelList.ItemsSource = _rows;
-
-        CountText.Text = $"{_rows.Count} seasons · {episodes.Count:N0} episodes · Esc to go back";
+        await ApplyAsync(await _browser.OpenSeriesAsync(row, CancellationToken.None));
     }
 
     /// <summary>Shows one season's episodes.</summary>
-    private void OpenSeason(LibraryRow row)
+    private async Task OpenSeasonAsync(LibraryRow row)
     {
-        _openSeason = row.SeasonNumber;
-
         ProgrammeTitle.Text = row.Title;
-        ShowEpisodes(_openEpisodes.Where(e => e.SeasonNumber == row.SeasonNumber).ToList());
+        await ApplyAsync(_browser.OpenSeason(row));
     }
 
     /// <summary>Asks the provider for a series' episodes and stores them.</summary>
-    private async Task<IReadOnlyList<EpisodeRecord>> FetchEpisodesAsync(
-        SqliteConnection connection,
-        LibraryRow row)
+    private async Task<IReadOnlyList<EpisodeRecord>> FetchEpisodesAsync(long seriesRowId)
     {
+        await using var connection = await OpenAsync();
+
         var info = await EpisodeSync.GetFetchInfoAsync(
-            connection, row.SeriesRowId, CancellationToken.None);
+            connection, seriesRowId, CancellationToken.None);
 
         if (info is null)
         {
-            Log($"no fetch info for series row {row.SeriesRowId}");
+            Log($"no fetch info for series row {seriesRowId}");
             CountText.Text = "this series is not on an enabled provider";
             return [];
         }
@@ -878,7 +698,7 @@ public sealed partial class MainWindow : Window
                 $"in {stopwatch.ElapsedMilliseconds}ms");
 
             await EpisodeSync.ReplaceAsync(
-                connection, info.ProviderId, row.SeriesRowId, episodes,
+                connection, info.ProviderId, seriesRowId, episodes,
                 DateTimeOffset.UtcNow, CancellationToken.None);
 
             return episodes;
@@ -978,7 +798,7 @@ public sealed partial class MainWindow : Window
         _session = null;
         _playingIndex = _rows.IndexOf(row);
 
-        ChannelTitle.Text = _openSeries is { } series ? $"{series.Title} — {row.Title}" : row.Title;
+        ChannelTitle.Text = _browser.OpenSeries is { } series ? $"{series.Title} — {row.Title}" : row.Title;
         ProgrammeTitle.Text = row.Subtitle;
 
         // The position of whatever was playing before this, saved before it is replaced.
@@ -1022,34 +842,6 @@ public sealed partial class MainWindow : Window
         _handle.Command("loadfile", url);
     }
 
-    private void ShowEpisodes(IReadOnlyList<EpisodeRecord> episodes)
-    {
-        _rows.Clear();
-        foreach (var episode in episodes)
-        {
-            _rows.Add(LibraryRow.FromEpisode(episode));
-        }
-
-        _playingIndex = -1;
-        ChannelList.ItemsSource = null;
-        ChannelList.ItemsSource = _rows;
-
-        // Says where Escape goes, because with two levels "go back" is ambiguous.
-        var back = HasSeveralSeasons ? "Esc for seasons" : "Esc for the series list";
-
-        CountText.Text = episodes.Count == 0
-            ? "no episodes — Esc or the Series tab to go back"
-            : $"{episodes.Count:N0} episodes · {back}";
-    }
-
-    /// <summary>Leaves an opened series and returns to the catalogue.</summary>
-    private async Task CloseSeriesAsync()
-    {
-        _openSeries = null;
-        _openSeason = null;
-        _openEpisodes = [];
-        await LoadLibraryAsync(SearchBox.Text);
-    }
 
     private async Task PlayAsync(LibraryRow row)
     {
@@ -1321,16 +1113,13 @@ public sealed partial class MainWindow : Window
                 {
                     SetFullScreen(false);
                 }
-                else if (_openSeason is not null && HasSeveralSeasons)
+                else if (await _browser.BackAsync(CancellationToken.None) is { } back)
                 {
-                    // Back to the season list, not out of the series. Escape unwinds one
-                    // level; a series with one season has no level here to unwind to.
-                    ProgrammeTitle.Text = "series";
-                    ShowSeasons(_openEpisodes);
-                }
-                else if (_openSeries is not null)
-                {
-                    await CloseSeriesAsync();
+                    // The browser knows how many levels there are; a series with one
+                    // season has no season list to return to. Null means it was already at
+                    // the catalogue and Escape has nothing left to unwind.
+                    ProgrammeTitle.Text = back.Level == BrowseLevel.Seasons ? "series" : ProgrammeTitle.Text;
+                    await ApplyAsync(back);
                 }
 
                 break;
@@ -1522,9 +1311,6 @@ public sealed partial class MainWindow : Window
         _toastTimer.Start();
     }
 
-    /// <summary>The chosen category name, or null for all of them.</summary>
-    private string? _category;
-
     /// <summary>Guards the combo's own repopulation from being read as a user choice.</summary>
     /// <remarks>
     /// Assigning ItemsSource raises SelectionChanged. Without this, switching from Live to
@@ -1533,13 +1319,15 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private bool _loadingCategories;
 
+    /// <summary>Suppresses the search handler while the box is cleared programmatically.</summary>
+    private bool _suppressSearch;
+
     /// <summary>Fills the category picker for whichever catalogue is showing.</summary>
-    private async Task LoadCategoriesAsync(SqliteConnection connection)
+    private async Task LoadCategoriesAsync()
     {
-        // Series have no categories to load: the provider publishes them but the series
-        // table has no column to join them to, so the picker is emptied rather than left
-        // showing the previous catalogue's.
-        if (_mode is LibraryView.Series or LibraryView.Favourites or LibraryView.Continue)
+        // The browser knows which views have categories at all. Emptied rather than left
+        // showing the previous catalogue's, which would be a filter the list is not using.
+        if (_browser.CategoryKindForView is not { } kind)
         {
             _loadingCategories = true;
             CategoryBox.ItemsSource = null;
@@ -1548,10 +1336,9 @@ public sealed partial class MainWindow : Window
             return;
         }
 
+        await using var connection = await OpenAsync();
         var categories = await CategoryRepository.GetCategoriesAsync(
-            connection,
-            _mode == LibraryView.Films ? CategoryKind.Vod : CategoryKind.Live,
-            CancellationToken.None);
+            connection, kind, CancellationToken.None);
 
         // "All categories" is a row rather than a cleared selection, because a ComboBox
         // with no way back to unfiltered is a trap.
@@ -1563,8 +1350,6 @@ public sealed partial class MainWindow : Window
         CategoryBox.SelectedIndex = 0;
         CategoryBox.IsEnabled = categories.Count > 0;
         _loadingCategories = false;
-
-        _category = null;
     }
 
     private const string AllCategories = "All categories";
@@ -1579,13 +1364,13 @@ public sealed partial class MainWindow : Window
         // The count is display only; the query matches on the name the provider gave.
         // Trimming it back off here keeps the list rows and the filter in one place rather
         // than storing a parallel list of names beside the one being shown.
-        _category = selected == AllCategories
+        var category = selected == AllCategories
             ? null
             : selected[..selected.LastIndexOf("  (", StringComparison.Ordinal)];
 
         try
         {
-            await LoadLibraryAsync(SearchBox.Text);
+            await ApplyAsync(await _browser.SetCategoryAsync(category, CancellationToken.None));
         }
         catch (Exception exception)
         {
@@ -1598,6 +1383,11 @@ public sealed partial class MainWindow : Window
     {
         // Restarting the timer on each keystroke is the debounce; the query only runs once
         // typing pauses.
+        if (_suppressSearch)
+        {
+            return;
+        }
+
         _searchDebounce.Stop();
         _searchDebounce.Start();
     }

@@ -2,7 +2,8 @@
     x:Class="Iptv.App.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-    xmlns:local="using:Iptv.App">
+    xmlns:local="using:Iptv.App"
+    xmlns:vm="using:Iptv.Presentation">
 
     <!--
         ZapTV. Electric yellow on near-black: the accent is a live wire, so it is used
@@ -112,7 +113,7 @@
             <ScrollViewer Grid.Row="1" Padding="8,0,8,0">
                 <ItemsRepeater x:Name="ChannelList">
                     <ItemsRepeater.ItemTemplate>
-                        <DataTemplate x:DataType="local:LibraryRow">
+                        <DataTemplate x:DataType="vm:LibraryRow">
                             <Button HorizontalAlignment="Stretch"
                                     HorizontalContentAlignment="Left"
                                     Background="Transparent"
@@ -135,7 +136,7 @@
                                                  Height="2"
                                                  Foreground="{StaticResource ZapAccent}"
                                                  Background="{StaticResource ZapTrack}"
-                                                 Visibility="{x:Bind ProgressVisibility}" />
+                                                 Visibility="{x:Bind local:Bindings.Show(ShowProgress)}" />
                                 </StackPanel>
                             </Button>
                         </DataTemplate>

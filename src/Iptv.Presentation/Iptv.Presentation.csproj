@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    View models, deliberately platform-neutral.
+
+    The app's behaviour lived in a 1,631-line MainWindow code-behind with no tests, because
+    testing a WinUI project means a test project carrying the Windows workload. Keeping the
+    view models here instead means they are tested by an ordinary net10.0 test project, and
+    Iptv.App is left holding only what genuinely needs XAML.
+
+    CommunityToolkit.Mvvm is netstandard2.0, so ObservableObject and RelayCommand work here
+    without pulling any UI framework in. The PRD names it for exactly this.
+  -->
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>Iptv.Presentation</RootNamespace>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CommunityToolkit.Mvvm" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Iptv.Core\Iptv.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    The same guard Iptv.Core carries. A view model that references Microsoft.UI.Xaml is a
+    view model that cannot be tested without the workload, which is the whole reason this
+    project exists.
+  -->
+  <Target Name="AssertNoUiDependencies" BeforeTargets="Build">
+    <Error Condition="'$(TargetFramework)' != '' And $(TargetFramework.Contains('-windows'))"
+           Code="IPTV0003"
+           Text="Iptv.Presentation must target a platform-neutral TFM. XAML types belong in Iptv.App." />
+  </Target>
+
+</Project>
