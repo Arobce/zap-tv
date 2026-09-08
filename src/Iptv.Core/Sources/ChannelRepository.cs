@@ -210,6 +210,79 @@ public static class ChannelRepository
     }
 
     /// <summary>How far through the current programme, or null when there is none.</summary>
+    /// <summary>
+    /// Marks a channel as a favourite, or unmarks it.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Inserts the row when it is missing. A channel can be favourited from a list built
+    /// from streams before <c>RefreshChannelsAsync</c> has run, and failing silently
+    /// because the row does not exist yet is worse than creating it.
+    /// </para>
+    /// <para>
+    /// This is user-owned state: sync merges and never replaces precisely so that a
+    /// provider refresh cannot clear it.
+    /// </para>
+    /// </remarks>
+    /// <returns>The state after the call.</returns>
+    public static async Task<bool> SetFavouriteAsync(
+        SqliteConnection connection,
+        string channelKey,
+        bool favourite,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(channelKey);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            INSERT INTO channels (channel_key, display_name, is_favorite)
+            VALUES (@key, @key, @favourite)
+            ON CONFLICT(channel_key) DO UPDATE SET is_favorite = excluded.is_favorite;
+            """;
+
+        command.Parameters.AddWithValue("@key", channelKey);
+        command.Parameters.AddWithValue("@favourite", favourite ? 1 : 0);
+
+        await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+        return favourite;
+    }
+
+    /// <summary>Flips a channel's favourite state.</summary>
+    /// <returns>The state after the call.</returns>
+    public static async Task<bool> ToggleFavouriteAsync(
+        SqliteConnection connection,
+        string channelKey,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentException.ThrowIfNullOrWhiteSpace(channelKey);
+
+        await using var read = connection.CreateCommand();
+        read.CommandText = "SELECT is_favorite FROM channels WHERE channel_key = @key;";
+        read.Parameters.AddWithValue("@key", channelKey);
+
+        var current = await read.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+        var isFavourite = current is long value && value == 1;
+
+        return await SetFavouriteAsync(connection, channelKey, !isFavourite, cancellationToken)
+            .ConfigureAwait(false);
+    }
+
+    /// <summary>How many channels are favourited.</summary>
+    public static async Task<int> CountFavouritesAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = "SELECT count(*) FROM channels WHERE is_favorite = 1;";
+
+        return Convert.ToInt32(await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false));
+    }
+
     /// <summary>The stored spelling of a kind. Renaming one is a migration.</summary>
     internal static string StreamKindStorage(StreamKind kind) => kind switch
     {

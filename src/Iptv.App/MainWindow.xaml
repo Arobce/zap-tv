@@ -160,7 +160,7 @@
                     <TextBlock x:Name="ProgrammeTitle"
                                FontSize="13"
                                Foreground="{StaticResource ZapTextDim}" />
-                    <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · M mute"
+                    <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · M mute · B favourite"
                                FontSize="11"
                                Margin="0,4,0,0"
                                Foreground="{StaticResource ZapTextFaint}" />

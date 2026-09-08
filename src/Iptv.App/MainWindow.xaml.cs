@@ -124,6 +124,7 @@ public sealed partial class MainWindow : Window
     private readonly DispatcherQueueTimer _firstFrameDeadline;
     private readonly DispatcherQueueTimer _stallWatch;
     private readonly DispatcherQueueTimer _toastTimer;
+    private readonly DispatcherQueueTimer _positionSave;
 
     public MainWindow()
     {
@@ -193,6 +194,13 @@ public sealed partial class MainWindow : Window
         _stallWatch.Interval = TimeSpan.FromSeconds(1);
         _stallWatch.Tick += async (_, _) => await CheckForStallAsync();
         _stallWatch.Start();
+
+        // 10s. Short enough that a crash or a power cut loses a few seconds rather than a
+        // few minutes, long enough that it is not a write per second for hours.
+        _positionSave = DispatcherQueue.CreateTimer();
+        _positionSave.Interval = TimeSpan.FromSeconds(10);
+        _positionSave.Tick += async (_, _) => await SavePositionAsync();
+        _positionSave.Start();
 
         _toastTimer = DispatcherQueue.CreateTimer();
         _toastTimer.Interval = TimeSpan.FromMilliseconds(1200);
@@ -840,6 +848,76 @@ public sealed partial class MainWindow : Window
         }
     }
 
+    /// <summary>What is playing, when it is resumable. Null for live television.</summary>
+    /// <remarks>
+    /// Live is excluded deliberately: a position in a broadcast means nothing an hour
+    /// later, and recording one fills the table with rows that can never be used.
+    /// </remarks>
+    private string? _resumeKey;
+
+    /// <summary>Writes down where the resumable thing currently is.</summary>
+    /// <remarks>
+    /// Called on a timer and again when playback is replaced, because the timer alone
+    /// loses up to its own interval, and closing the window is exactly when the last few
+    /// seconds matter.
+    /// </remarks>
+    private async Task SavePositionAsync()
+    {
+        if (_resumeKey is not { } key || _handle is null || !_firstFrameSeen)
+        {
+            return;
+        }
+
+        if (!TryReadSeconds("time-pos", out var position))
+        {
+            return;
+        }
+
+        var duration = TryReadSeconds("duration", out var length) ? length : (int?)null;
+
+        try
+        {
+            await using var connection = await OpenAsync();
+            await PlaybackStateRepository.SaveAsync(
+                connection, key, position, duration, DateTimeOffset.UtcNow, CancellationToken.None);
+        }
+        catch (Exception exception)
+        {
+            // Losing a resume position must never take playback down with it.
+            Log($"saving position failed: {exception.Message}");
+        }
+    }
+
+    /// <summary>Reads an mpv property that holds a number of seconds.</summary>
+    private bool TryReadSeconds(string property, out int seconds)
+    {
+        seconds = 0;
+
+        var raw = _handle?.GetProperty(property);
+        if (raw is null ||
+            !double.TryParse(raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) ||
+            double.IsNaN(value) || value <= 0)
+        {
+            return false;
+        }
+
+        seconds = (int)value;
+        return true;
+    }
+
+    /// <summary>Sets where mpv should start the next file, or clears it.</summary>
+    /// <remarks>
+    /// The <c>start</c> option is sticky: set once, it applies to every subsequent file
+    /// until changed. Clearing it explicitly is what stops the next channel opening a
+    /// minute in.
+    /// </remarks>
+    private void SetStartPosition(int? seconds)
+    {
+        _handle?.SetProperty(
+            "start",
+            seconds is { } value ? value.ToString(CultureInfo.InvariantCulture) : "none");
+    }
+
     /// <summary>Opens one episode's own URL.</summary>
     private async Task PlayEpisodeAsync(LibraryRow row, string url)
     {
@@ -857,6 +935,24 @@ public sealed partial class MainWindow : Window
 
         ChannelTitle.Text = _openSeries is { } series ? $"{series.Title} — {row.Title}" : row.Title;
         ProgrammeTitle.Text = row.Subtitle;
+
+        // The position of whatever was playing before this, saved before it is replaced.
+        await SavePositionAsync();
+
+        _resumeKey = row.Key;
+
+        await using (var connection = await OpenAsync())
+        {
+            var resume = await PlaybackStateRepository.GetResumeSecondsAsync(
+                connection, row.Key, CancellationToken.None);
+
+            SetStartPosition(resume);
+
+            if (resume is { } seconds)
+            {
+                Toast($"Resuming at {TimeSpan.FromSeconds(seconds):h\\:mm\\:ss}");
+            }
+        }
 
         _currentStream?.Dispose();
         _currentStream = null;
@@ -965,6 +1061,31 @@ public sealed partial class MainWindow : Window
 
         ChannelTitle.Text = row.Title;
         ProgrammeTitle.Text = row.Subtitle;
+
+        await SavePositionAsync();
+
+        // Films resume; live television does not. Clearing the key as well as the start
+        // option matters, because both are sticky and a channel opened after a film would
+        // otherwise inherit the film's position.
+        if (row.Kind == LibraryKind.Film)
+        {
+            _resumeKey = row.Key;
+
+            var resume = await PlaybackStateRepository.GetResumeSecondsAsync(
+                connection, row.Key, CancellationToken.None);
+
+            SetStartPosition(resume);
+
+            if (resume is { } seconds)
+            {
+                Toast($"Resuming at {TimeSpan.FromSeconds(seconds):h\\:mm\\:ss}");
+            }
+        }
+        else
+        {
+            _resumeKey = null;
+            SetStartPosition(null);
+        }
 
         // Back to the root, so the next arrow press changes channel instead of scrolling
         // the list button that was just clicked.
@@ -1166,6 +1287,12 @@ public sealed partial class MainWindow : Window
                 ToggleMute();
                 break;
 
+            // B for bookmark. F is fullscreen and S is free but reads as "stop"; B is what
+            // browsers use for the same idea.
+            case VirtualKey.B:
+                await ToggleFavouriteAsync();
+                break;
+
             case VirtualKey.Left:
                 AdjustVolume(-5);
                 break;
@@ -1225,6 +1352,36 @@ public sealed partial class MainWindow : Window
                 return;
             }
         }
+    }
+
+    /// <summary>Marks the playing channel as a favourite, or unmarks it.</summary>
+    /// <remarks>
+    /// Acts on what is playing rather than on a selected row: the list has no selection
+    /// model yet, and "the channel I am watching" is the one worth keeping anyway.
+    /// </remarks>
+    private async Task ToggleFavouriteAsync()
+    {
+        if (_playingIndex < 0 || _playingIndex >= _rows.Count)
+        {
+            Toast("Nothing playing to favourite");
+            return;
+        }
+
+        var row = _rows[_playingIndex];
+        if (row.Kind != LibraryKind.Live)
+        {
+            // Favourites are a live-TV idea: they sort a 20,479-row list. Films and
+            // episodes have continue-watching instead.
+            Toast("Favourites are for live channels");
+            return;
+        }
+
+        await using var connection = await OpenAsync();
+        var favourite = await ChannelRepository.ToggleFavouriteAsync(
+            connection, row.Key, CancellationToken.None);
+
+        Toast(favourite ? $"★  {row.Title}" : $"Removed  {row.Title}");
+        Log($"favourite {(favourite ? "set" : "cleared")} for {row.Key}");
     }
 
     private void TogglePause()
@@ -1396,6 +1553,7 @@ public sealed partial class MainWindow : Window
         _firstFrameDeadline.Stop();
         _stallWatch.Stop();
         _toastTimer.Stop();
+        _positionSave.Stop();
         _session = null;
 
         // Release the provider slot before anything else: the stream must be given back
