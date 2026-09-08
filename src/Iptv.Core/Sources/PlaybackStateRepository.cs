@@ -23,6 +23,28 @@ public sealed record PlaybackPosition
         : null;
 }
 
+/// <summary>An unfinished thing, resolved to something showable.</summary>
+public sealed record ContinueWatchingItem
+{
+    public required string ContentKey { get; init; }
+
+    public required string Title { get; init; }
+
+    public required int PositionSeconds { get; init; }
+
+    public int? DurationSeconds { get; init; }
+
+    /// <summary>An episode rather than a film. They play by different routes.</summary>
+    public required bool IsEpisode { get; init; }
+
+    public required DateTimeOffset UpdatedUtc { get; init; }
+
+    /// <summary>How far through, 0 to 1, or null when the length is unknown.</summary>
+    public double? Progress => DurationSeconds is > 0
+        ? Math.Clamp(PositionSeconds / (double)DurationSeconds.Value, 0, 1)
+        : null;
+}
+
 /// <summary>
 /// Remembers where films and episodes were left.
 /// </summary>
@@ -188,6 +210,73 @@ public static class PlaybackStateRepository
         while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
         {
             results.Add(Read(reader));
+        }
+
+        return results;
+    }
+
+    /// <summary>
+    /// Resolves unfinished positions to things that can actually be shown and played.
+    /// </summary>
+    /// <remarks>
+    /// Joined to <c>streams</c> rather than returning bare keys, because a content key is
+    /// not a title. Films and episodes both work through one query: an episode's
+    /// <c>channel_key</c> is its <c>ep:</c> key, so the join is the same either way.
+    /// <para>
+    /// Positions whose stream has since gone — a provider dropped the film, or the series
+    /// was never refetched — are left out. Offering to resume something that cannot be
+    /// opened is worse than not offering it.
+    /// </para>
+    /// </remarks>
+    public static async Task<IReadOnlyList<ContinueWatchingItem>> GetContinueWatchingItemsAsync(
+        SqliteConnection connection,
+        int limit,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT
+                ps.content_key,
+                ps.position_secs,
+                ps.duration_secs,
+                min(s.title),
+                min(s.kind),
+                ps.updated_utc
+            FROM playback_state ps
+            JOIN streams s
+              ON s.channel_key = ps.content_key
+             AND s.is_active = 1
+             AND s.is_separator = 0
+             AND s.kind IN ('vod', 'series_episode')
+            JOIN providers pr ON pr.id = s.provider_id AND pr.enabled = 1
+            WHERE ps.completed = 0
+              AND ps.position_secs >= @minimum
+            GROUP BY ps.content_key
+            ORDER BY ps.updated_utc DESC
+            LIMIT @limit;
+            """;
+
+        command.Parameters.AddWithValue("@minimum", MinimumSeconds);
+        command.Parameters.AddWithValue("@limit", limit);
+
+        var results = new List<ContinueWatchingItem>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var duration = reader.IsDBNull(2) ? null : (int?)reader.GetInt32(2);
+
+            results.Add(new ContinueWatchingItem
+            {
+                ContentKey = reader.GetString(0),
+                PositionSeconds = reader.GetInt32(1),
+                DurationSeconds = duration,
+                Title = reader.GetString(3),
+                IsEpisode = reader.GetString(4) == "series_episode",
+                UpdatedUtc = DateTimeOffset.FromUnixTimeSeconds(reader.GetInt64(5)),
+            });
         }
 
         return results;

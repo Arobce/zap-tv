@@ -80,10 +80,17 @@
 
                 <!-- Three catalogues, one list. Live, films and series differ enough in
                      shape to need separate queries but not separate views. -->
-                <StackPanel Orientation="Horizontal" Spacing="6">
-                    <Button x:Name="LiveTab" Content="Live" Click="OnModeClicked" Tag="Live" />
-                    <Button x:Name="FilmsTab" Content="Films" Click="OnModeClicked" Tag="Film" />
-                    <Button x:Name="SeriesTab" Content="Series" Click="OnModeClicked" Tag="Series" />
+                <StackPanel Orientation="Horizontal" Spacing="5">
+                    <Button x:Name="LiveTab" Content="Live" Click="OnModeClicked" Tag="Live" Padding="10,5" />
+                    <Button x:Name="FilmsTab" Content="Films" Click="OnModeClicked" Tag="Films" Padding="10,5" />
+                    <Button x:Name="SeriesTab" Content="Series" Click="OnModeClicked" Tag="Series" Padding="10,5" />
+
+                    <!-- The payoff for the B key and for resume: without somewhere to see
+                         them, marking a favourite and keeping a position both go nowhere. -->
+                    <Button x:Name="FavouritesTab" Content="★" Click="OnModeClicked" Tag="Favourites"
+                            Padding="10,5" ToolTipService.ToolTip="Favourites" />
+                    <Button x:Name="ContinueTab" Content="▶" Click="OnModeClicked" Tag="Continue"
+                            Padding="10,5" ToolTipService.ToolTip="Continue watching" />
                 </StackPanel>
 
                 <!-- The provider groups its own catalogue, and with 118,763 entries that
