@@ -74,11 +74,16 @@
                         <Run Text="ZAP" Foreground="{StaticResource ZapAccent}" />
                         <Run Text="TV" Foreground="{StaticResource ZapText}" />
                     </TextBlock>
+                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Spacing="6">
+                    <Button Content="Guide"
+                            Padding="10,4"
+                            FontSize="12"
+                            Click="OnOpenEpgClicked" />
                     <Button Content="Providers"
-                            HorizontalAlignment="Right"
                             Padding="10,4"
                             FontSize="12"
                             Click="OnOpenProvidersClicked" />
+                    </StackPanel>
                 </Grid>
 
                 <TextBlock x:Name="LibraryText"
@@ -208,6 +213,75 @@
                            FontSize="12"
                            Foreground="{StaticResource ZapAccentDim}" />
             </Border>
+        </Grid>
+
+        <!--
+            The guide. Two axes of virtualization: the body is a Canvas sized to the whole
+            guide, and only the blocks in view are realized onto it. Nothing here binds to
+            a collection, because a collection of 164,661 programmes is the thing being
+            avoided.
+        -->
+        <Grid x:Name="EpgPanel"
+              Grid.ColumnSpan="2"
+              Background="{StaticResource ZapBackground}"
+              Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+            </Grid.RowDefinitions>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="220" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Grid.Row="0" Grid.ColumnSpan="2" Orientation="Horizontal"
+                        Padding="16,12" Spacing="14">
+                <TextBlock Text="Guide" FontSize="20" FontWeight="Bold"
+                           Foreground="{StaticResource ZapText}" />
+                <TextBlock x:Name="EpgSummary" FontSize="12" VerticalAlignment="Center"
+                           Foreground="{StaticResource ZapTextDim}" />
+                <Button Content="Now" Click="OnEpgNowClicked" Padding="10,4" FontSize="12" />
+                <Button Content="Close" Click="OnCloseEpgClicked" Padding="10,4" FontSize="12" />
+            </StackPanel>
+
+            <!-- The corner is empty on purpose: it is where the two headers meet. -->
+            <Border Grid.Row="1" Grid.Column="0" Background="{StaticResource ZapSurface}" />
+
+            <!--
+                The time header and the channel column scroll with the body rather than
+                with the pointer, so their scrollbars are off and their offsets are driven
+                from the body's ViewChanged.
+            -->
+            <ScrollViewer x:Name="EpgHeaderScroll" Grid.Row="1" Grid.Column="1"
+                          HorizontalScrollMode="Disabled" VerticalScrollMode="Disabled"
+                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"
+                          Background="{StaticResource ZapSurface}">
+                <Canvas x:Name="EpgHeaderCanvas" Height="28" />
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="EpgChannelScroll" Grid.Row="2" Grid.Column="0"
+                          HorizontalScrollMode="Disabled" VerticalScrollMode="Disabled"
+                          HorizontalScrollBarVisibility="Hidden" VerticalScrollBarVisibility="Hidden"
+                          Background="{StaticResource ZapSurface}">
+                <Canvas x:Name="EpgChannelCanvas" Width="220" />
+            </ScrollViewer>
+
+            <ScrollViewer x:Name="EpgBodyScroll" Grid.Row="2" Grid.Column="1"
+                          HorizontalScrollMode="Enabled" VerticalScrollMode="Enabled"
+                          HorizontalScrollBarVisibility="Auto" VerticalScrollBarVisibility="Auto"
+                          ZoomMode="Disabled"
+                          ViewChanged="OnEpgViewChanged">
+                <Canvas x:Name="EpgBodyCanvas" />
+            </ScrollViewer>
+
+            <TextBlock x:Name="EpgEmptyText"
+                       Grid.Row="2" Grid.Column="1"
+                       HorizontalAlignment="Center" VerticalAlignment="Center"
+                       FontSize="14" TextWrapping="Wrap" MaxWidth="460"
+                       TextAlignment="Center"
+                       Foreground="{StaticResource ZapTextDim}"
+                       Visibility="Collapsed" />
         </Grid>
 
         <!--

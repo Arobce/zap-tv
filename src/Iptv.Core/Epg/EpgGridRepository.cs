@@ -160,6 +160,64 @@ public static class EpgGridRepository
             .ToList();
     }
 
+    /// <summary>One channel on the grid's vertical axis.</summary>
+    public sealed record EpgChannel
+    {
+        public required string ChannelKey { get; init; }
+
+        public required string DisplayName { get; init; }
+
+        public required bool IsFavorite { get; init; }
+    }
+
+    /// <summary>
+    /// The channels the grid draws rows for.
+    /// </summary>
+    /// <remarks>
+    /// Only channels with a guide. 82% of this library has none, and a grid of 20,479 rows
+    /// where 17,000 are permanently blank is not a guide, it is a way to lose the ones that
+    /// work. Favourites first, matching the channel list's own order.
+    /// </remarks>
+    public static async Task<IReadOnlyList<EpgChannel>> GetGridChannelsAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT c.channel_key, c.display_name, c.is_favorite
+            FROM channels c
+            JOIN epg_map m ON m.channel_key = c.channel_key
+            WHERE c.is_hidden = 0
+              AND EXISTS (
+                  SELECT 1 FROM streams s
+                   JOIN providers pr ON pr.id = s.provider_id AND pr.enabled = 1
+                   WHERE s.channel_key = c.channel_key
+                     AND s.kind = 'live'
+                     AND s.is_active = 1
+                     AND s.is_separator = 0)
+            ORDER BY c.is_favorite DESC,
+                     COALESCE(c.user_sort_order, 2147483647),
+                     c.display_name;
+            """;
+
+        var results = new List<EpgChannel>();
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            results.Add(new EpgChannel
+            {
+                ChannelKey = reader.GetString(0),
+                DisplayName = reader.GetString(1),
+                IsFavorite = reader.GetInt64(2) == 1,
+            });
+        }
+
+        return results;
+    }
+
     /// <summary>The span the stored guide actually covers.</summary>
     /// <remarks>
     /// The grid needs real bounds rather than a fixed 14 days: scrolling into a week of
