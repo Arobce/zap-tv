@@ -38,6 +38,7 @@ internal static class Program
                 "categories" => await CategoriesAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "kinds" => await KindLeakSurvey.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "rebuild" => await RebuildChannelsAsync(CancellationToken.None).ConfigureAwait(false),
+                "episodes" => await EpisodeProbe.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -67,6 +68,7 @@ internal static class Program
         Console.WriteLine("  categories [x]  Refresh provider category names; lists those matching x");
         Console.WriteLine("  kinds [term]    Report live/VOD key collisions; no network");
         Console.WriteLine("  rebuild         Recompute channel names from live streams; no network");
+        Console.WriteLine("  episodes [x]    Fetch one series episodes end to end, without the UI");
         return 1;
     }
 
@@ -1046,8 +1048,6 @@ internal static class Program
     {
         await using var command = connection.CreateCommand();
 
-        // Credentials are not written here. Persisting them is Phase 9's job and requires
-        // DPAPI encryption; the harness holds them in memory for the run only.
         command.CommandText =
             """
             INSERT INTO providers (id, name, kind, base_url)
@@ -1057,6 +1057,15 @@ internal static class Program
             """;
         command.Parameters.AddWithValue("@base_url", credentials.BaseUrl.ToString());
         await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
+
+        // Stored DPAPI-encrypted, scoped to this user. The app has no other way to reach
+        // the provider — it reads the database and nothing else — so without this it can
+        // browse the library and never fetch anything, which is what kept series episodes
+        // unreachable.
+        await ProviderCredentialStore
+            .SaveAsync(connection, 1, credentials, new DpapiSecretProtector(), cancellationToken)
+            .ConfigureAwait(false);
+
         return 1;
     }
 

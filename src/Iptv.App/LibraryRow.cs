@@ -10,6 +10,9 @@ public enum LibraryKind
     Live,
     Film,
     Series,
+
+    /// <summary>One episode inside an opened series.</summary>
+    Episode,
 }
 
 /// <summary>
@@ -50,6 +53,17 @@ public sealed class LibraryRow
     /// </remarks>
     public bool Playable { get; }
 
+    /// <summary>The <c>series.id</c> to fetch episodes for. Zero unless this is a series.</summary>
+    public long SeriesRowId { get; private init; }
+
+    /// <summary>An episode plays from its own URL rather than a channel_key lookup.</summary>
+    /// <remarks>
+    /// Episodes are fetched on demand and stored, but the row is built from what was just
+    /// fetched, so carrying the URL avoids a round trip through the database to read back
+    /// what is already in hand.
+    /// </remarks>
+    public string? EpisodeUrl { get; private init; }
+
     public double ProgressPercent { get; private init; }
 
     /// <summary>Hidden rather than zero-width when there is no programme to measure.</summary>
@@ -86,14 +100,37 @@ public sealed class LibraryRow
     {
         ArgumentNullException.ThrowIfNull(item);
 
-        // Says why it cannot be played rather than failing silently on click. The reason is
-        // a real design constraint, not a missing feature to be embarrassed about.
+        // Not playable itself: a series is a container. Clicking it opens the episode list,
+        // which is one provider request rather than the 49,783 a bulk fetch would be.
         var year = item.Year is { } y ? $"{y} · " : string.Empty;
         return new LibraryRow(
             item.Key,
             item.Title,
-            $"{year}series · episodes load on open",
+            $"{year}series · open for episodes",
             LibraryKind.Series,
-            playable: false);
+            playable: false)
+        {
+            SeriesRowId = item.SeriesRowId,
+        };
+    }
+
+    /// <summary>One episode, inside an opened series.</summary>
+    public static LibraryRow FromEpisode(EpisodeRecord episode)
+    {
+        ArgumentNullException.ThrowIfNull(episode);
+
+        var label = $"S{episode.SeasonNumber:00}E{episode.EpisodeNumber:00}";
+
+        // The number is the subtitle, not a prefix on the title. Prefixing makes every row
+        // start with the same shape and pushes the actual name out of a narrow list.
+        return new LibraryRow(
+            $"ep:{episode.ProviderEpisodeId}",
+            episode.Title,
+            label,
+            LibraryKind.Episode,
+            playable: true)
+        {
+            EpisodeUrl = episode.Url,
+        };
     }
 }

@@ -39,6 +39,13 @@ public sealed record CatalogueItem
 
     /// <summary>Seasons the provider declared. Zero for films.</summary>
     public int SeasonCount { get; init; }
+
+    /// <summary>The <c>series.id</c> episodes hang off. Zero for films.</summary>
+    /// <remarks>
+    /// The row id, not the series_key. Episodes are fetched per provider listing, and a
+    /// key can span several of those.
+    /// </remarks>
+    public long SeriesRowId { get; init; }
 }
 
 /// <summary>
@@ -136,7 +143,8 @@ public static class LibraryRepository
                 s.series_key,
                 min(s.title),
                 max(s.cover_url),
-                max(s.year)
+                max(s.year),
+                min(s.id)
             FROM series s
             WHERE (@search IS NULL OR s.title LIKE '%' || @search || '%')
             GROUP BY s.series_key
@@ -156,6 +164,7 @@ public static class LibraryRepository
                 Title = reader.IsDBNull(1) ? reader.GetString(0) : reader.GetString(1),
                 ImageUrl = reader.IsDBNull(2) ? null : reader.GetString(2),
                 Year = reader.IsDBNull(3) ? null : reader.GetInt32(3),
+                SeriesRowId = reader.GetInt64(4),
             });
         }
 

@@ -19,6 +19,14 @@
   <ItemGroup>
     <PackageReference Include="Microsoft.Data.Sqlite" />
     <PackageReference Include="SQLitePCLRaw.bundle_e_sqlite3" />
+
+    <!--
+      DPAPI, for the provider credential store. An ordinary netstandard package rather than
+      a Windows workload, so IPTV0002 below still holds and this assembly still builds and
+      tests on a machine without one. DpapiSecretProtector is attributed and guarded so a
+      non-Windows caller fails clearly.
+    -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" />
   </ItemGroup>
 
   <!--

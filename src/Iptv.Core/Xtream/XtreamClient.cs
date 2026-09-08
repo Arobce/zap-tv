@@ -114,6 +114,36 @@ public sealed class XtreamClient
     public IAsyncEnumerable<XtreamSeries> GetSeriesAsync(CancellationToken cancellationToken)
         => StreamAsync<XtreamSeries>("get_series", cancellationToken);
 
+    /// <summary>
+    /// Fetches one series' episodes.
+    /// </summary>
+    /// <remarks>
+    /// One request per series. Sync deliberately does not call this: the reference provider
+    /// lists 49,748 series, and fetching them all would be 49,748 requests against an
+    /// account that permits one connection. Called when a series is opened, where it is a
+    /// single request for something the user asked for.
+    /// </remarks>
+    public async Task<XtreamSeriesInfo> GetSeriesInfoAsync(
+        long seriesId,
+        CancellationToken cancellationToken)
+    {
+        var url = new Uri($"{_credentials.BuildApiUrl("get_series_info")}&series_id={seriesId}");
+        var body = await GetStringAsync(url, cancellationToken).ConfigureAwait(false);
+
+        try
+        {
+            // Null when the panel answers "false" or "null" for an unknown series, which
+            // several do instead of returning an empty object.
+            return JsonSerializer.Deserialize<XtreamSeriesInfo>(body, XtreamJson.Options)
+                   ?? new XtreamSeriesInfo();
+        }
+        catch (JsonException exception)
+        {
+            throw new XtreamProtocolException(
+                $"The provider's series info for {seriesId} was not usable JSON.", exception);
+        }
+    }
+
     /// <summary>Streams the live channels. 28,285 on the reference provider.</summary>
     public IAsyncEnumerable<XtreamLiveStream> GetLiveStreamsAsync(CancellationToken cancellationToken)
         => StreamAsync<XtreamLiveStream>("get_live_streams", cancellationToken);
@@ -182,16 +212,18 @@ public sealed class XtreamClient
         }
     }
 
-    private async Task<string> GetStringAsync(string? action, CancellationToken cancellationToken)
+    private Task<string> GetStringAsync(string? action, CancellationToken cancellationToken)
+        => GetStringAsync(_credentials.BuildApiUrl(action), cancellationToken);
+
+    private async Task<string> GetStringAsync(Uri url, CancellationToken cancellationToken)
     {
-        var url = _credentials.BuildApiUrl(action);
         using var response = await SendAsync(url, cancellationToken).ConfigureAwait(false);
 
         var body = await response.Content.ReadAsStringAsync(cancellationToken).ConfigureAwait(false);
         if (string.IsNullOrWhiteSpace(body))
         {
             throw new XtreamProtocolException(
-                "The provider returned an empty response where an account payload was expected.");
+                "The provider returned an empty response where a payload was expected.");
         }
 
         return body;

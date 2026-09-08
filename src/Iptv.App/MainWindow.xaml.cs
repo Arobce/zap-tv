@@ -4,12 +4,14 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO;
 using System.Linq;
+using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Iptv.Core.Data;
 using Iptv.Core.Playback;
 using Iptv.Core.Sources;
+using Iptv.Core.Xtream;
 using Iptv.Mpv;
 using Microsoft.Data.Sqlite;
 using Microsoft.UI.Dispatching;
@@ -126,7 +128,7 @@ public sealed partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        Title = "IPTV Player";
+        Title = "ZapTV";
 
         // Sized through AppWindow rather than left at the WinUI default, which opens
         // larger than a 1080p screen. Resizing later with Win32 MoveWindow does not drive
@@ -341,6 +343,10 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private async Task LoadLibraryAsync(string? search)
     {
+        // Leaving an opened series: a search or a reload is a request for the catalogue,
+        // not for the episode list that happens to be showing.
+        _openSeries = null;
+
         await using var connection = await OpenAsync();
         var term = string.IsNullOrWhiteSpace(search) ? null : search;
 
@@ -597,6 +603,7 @@ public sealed partial class MainWindow : Window
 
         _mode = mode;
         _category = null;
+        _openSeries = null;
         UpdateModeButtons();
 
         // The search term does not carry across catalogues: a term that matched channels
@@ -646,23 +653,204 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (!row.Playable)
+        // Caught, because this is an async void handler: an exception escaping it is
+        // unhandled at the top of the stack, and the whole reason a broken query here
+        // presented as "clicking does nothing" is that it had nowhere to be reported.
+        try
         {
-            // Series have no stream until their episodes are fetched, which sync skips
-            // deliberately: one request per series against 49,783 of them.
-            ChannelTitle.Text = row.Title;
-            ProgrammeTitle.Text = row.Subtitle;
-            StatusText.Text = "no episodes yet — series fetch is not wired up";
+            if (row.Kind == LibraryKind.Series)
+            {
+                await OpenSeriesAsync(row);
+                return;
+            }
+
+            if (row.Playable)
+            {
+                await PlayAsync(row);
+            }
+        }
+        catch (Exception exception)
+        {
+            Log($"row click failed: {exception}");
+            CountText.Text = $"failed: {exception.Message}";
+            StatusText.Text = "see the log";
+        }
+    }
+
+    /// <summary>The series currently drilled into, or null when showing a catalogue.</summary>
+    private LibraryRow? _openSeries;
+
+    /// <summary>
+    /// Shows one series' episodes, fetching them from the provider if needed.
+    /// </summary>
+    /// <remarks>
+    /// One request, for a series the user asked for. Sync deliberately does not fetch
+    /// episodes: <c>get_series_info</c> is per series and the reference provider lists
+    /// 49,783, so a bulk fetch is 49,783 requests on a one-connection account.
+    /// </remarks>
+    private async Task OpenSeriesAsync(LibraryRow row)
+    {
+        await using var connection = await OpenAsync();
+
+        Log($"opening series {row.Title} (row {row.SeriesRowId})");
+        _openSeries = row;
+        ChannelTitle.Text = row.Title;
+        ProgrammeTitle.Text = "series";
+
+        var episodes = await EpisodeSync.GetEpisodesAsync(
+            connection, row.SeriesRowId, CancellationToken.None);
+
+        if (episodes.Count == 0)
+        {
+            CountText.Text = "fetching episodes...";
+            episodes = await FetchEpisodesAsync(connection, row);
+        }
+
+        ShowEpisodes(episodes);
+    }
+
+    /// <summary>Asks the provider for a series' episodes and stores them.</summary>
+    private async Task<IReadOnlyList<EpisodeRecord>> FetchEpisodesAsync(
+        SqliteConnection connection,
+        LibraryRow row)
+    {
+        var info = await EpisodeSync.GetFetchInfoAsync(
+            connection, row.SeriesRowId, CancellationToken.None);
+
+        if (info is null)
+        {
+            Log($"no fetch info for series row {row.SeriesRowId}");
+            CountText.Text = "this series is not on an enabled provider";
+            return [];
+        }
+
+        // Read from the database, DPAPI-encrypted by whichever sync wrote them. The app has
+        // no other route to the provider, which is why episodes were unreachable before the
+        // credential store existed.
+        var credentials = await ProviderCredentialStore.LoadAsync(
+            connection, info.ProviderId, new DpapiSecretProtector(), CancellationToken.None);
+
+        if (credentials is null)
+        {
+            Log($"no stored credentials for provider {info.ProviderId}");
+            CountText.Text = "no stored provider credentials — run: harness sync";
+            return [];
+        }
+
+        try
+        {
+            using var handler = new SocketsHttpHandler
+            {
+                PooledConnectionLifetime = TimeSpan.FromMinutes(5),
+            };
+
+            using var http = new HttpClient(handler) { Timeout = TimeSpan.FromSeconds(30) };
+            http.DefaultRequestHeaders.UserAgent.ParseAdd("ZapTV/0.1");
+
+            var stopwatch = Stopwatch.StartNew();
+            var response = await new XtreamClient(http, credentials)
+                .GetSeriesInfoAsync(info.ProviderSeriesId, CancellationToken.None);
+
+            var episodes = EpisodeSync.Map(response, credentials);
+            stopwatch.Stop();
+
+            Log($"fetched {episodes.Count} episodes for series {info.ProviderSeriesId} " +
+                $"in {stopwatch.ElapsedMilliseconds}ms");
+
+            await EpisodeSync.ReplaceAsync(
+                connection, info.ProviderId, row.SeriesRowId, episodes,
+                DateTimeOffset.UtcNow, CancellationToken.None);
+
+            return episodes;
+        }
+        catch (Exception exception)
+        {
+            // A metadata request, not a stream, so a failure here costs nothing and must
+            // not take the app down. Said plainly rather than left as an empty list.
+            Log($"series fetch failed: {exception}");
+            CountText.Text = $"could not fetch episodes: {exception.Message}";
+            return [];
+        }
+    }
+
+    /// <summary>Opens one episode's own URL.</summary>
+    private async Task PlayEpisodeAsync(LibraryRow row, string url)
+    {
+        if (!_swapChainAttached || _handle is null)
+        {
+            StatusText.Text = "no video surface; cannot play";
             return;
         }
 
-        await PlayAsync(row);
+        // No failover session: an episode has one source. _session stays null, which the
+        // stall watcher reads as "nothing playing" and so leaves alone - correct here,
+        // since there would be nothing to fail over to anyway.
+        _session = null;
+        _playingIndex = _rows.IndexOf(row);
+
+        ChannelTitle.Text = _openSeries is { } series ? $"{series.Title} — {row.Title}" : row.Title;
+        ProgrammeTitle.Text = row.Subtitle;
+
+        _currentStream?.Dispose();
+        _currentStream = null;
+
+        try
+        {
+            _currentStream = await _connections.AcquireAsync(CancellationToken.None);
+        }
+        catch (OperationCanceledException)
+        {
+            return;
+        }
+
+        _switchTimer = Stopwatch.StartNew();
+        _firstFrameSeen = false;
+        _stallSeconds = 0;
+        _framesAtOpen = _presenter?.FramesPresented ?? 0;
+        StatusText.Text = "opening...";
+
+        RootGrid.Focus(FocusState.Programmatic);
+        Log($"loadfile episode {row.Key}");
+        _handle.Command("loadfile", url);
+    }
+
+    private void ShowEpisodes(IReadOnlyList<EpisodeRecord> episodes)
+    {
+        _rows.Clear();
+        foreach (var episode in episodes)
+        {
+            _rows.Add(LibraryRow.FromEpisode(episode));
+        }
+
+        _playingIndex = -1;
+        ChannelList.ItemsSource = null;
+        ChannelList.ItemsSource = _rows;
+
+        CountText.Text = episodes.Count == 0
+            ? "no episodes — Esc or the Series tab to go back"
+            : $"{episodes.Count:N0} episodes · Esc to go back";
+    }
+
+    /// <summary>Leaves an opened series and returns to the catalogue.</summary>
+    private async Task CloseSeriesAsync()
+    {
+        _openSeries = null;
+        await LoadLibraryAsync(SearchBox.Text);
     }
 
     private async Task PlayAsync(LibraryRow row)
     {
         if (_handle is null)
         {
+            return;
+        }
+
+        // An episode carries its own URL, so it skips the channel_key lookup and the
+        // failover plan: a series episode has exactly one source, and there is nothing to
+        // fail over to.
+        if (row.Kind == LibraryKind.Episode && row.EpisodeUrl is { } episodeUrl)
+        {
+            await PlayEpisodeAsync(row, episodeUrl);
             return;
         }
 
@@ -878,9 +1066,15 @@ public sealed partial class MainWindow : Window
                 break;
 
             case VirtualKey.Escape:
+                // Fullscreen first. Escape means "back out of the innermost thing", and
+                // leaving the series list while still fullscreen would be the wrong one.
                 if (_fullScreen)
                 {
                     SetFullScreen(false);
+                }
+                else if (_openSeries is not null)
+                {
+                    await CloseSeriesAsync();
                 }
 
                 break;
