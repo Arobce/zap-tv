@@ -40,6 +40,7 @@ internal static class Program
                 "rebuild" => await RebuildChannelsAsync(CancellationToken.None).ConfigureAwait(false),
                 "episodes" => await EpisodeProbe.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "guide" => await GuideSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
+                "search" => await SearchProbe.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -114,6 +115,19 @@ internal static class Program
         await TimeAsync("first page of series", async () =>
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
 
+        await TimeAsync("rebuild search index", async () =>
+        {
+            await SearchRepository.RebuildStreamIndexAsync(connection, cancellationToken);
+            return "done";
+        }).ConfigureAwait(false);
+
+        foreach (var term in new[] { "news", "bbc one", "matrix", "sport" })
+        {
+            var captured = term;
+            await TimeAsync($"search {captured}", async () =>
+                 $"{(await SearchRepository.SearchAsync(connection, captured, 20, DateTimeOffset.UtcNow, cancellationToken)).Count} hits").ConfigureAwait(false);
+        }
+
         await TimeAsync("epg coverage span", async () =>
         {
             var (from, to) = await EpgGridRepository.GetCoverageAsync(connection, cancellationToken);
@@ -170,9 +184,14 @@ internal static class Program
 
         var stopwatch = Stopwatch.StartNew();
         var rows = await ProviderSync.RefreshChannelsAsync(connection, cancellationToken).ConfigureAwait(false);
+
+        // The search indexes are external-content: they hold no data of their own and are
+        // empty until rebuilt. Sync does this, but a schema change that adds one should not
+        // require refetching a quarter of a million rows to fill it.
+        await SearchRepository.RebuildStreamIndexAsync(connection, cancellationToken).ConfigureAwait(false);
         stopwatch.Stop();
 
-        Console.WriteLine($"  {rows:N0} channel rows rewritten in {stopwatch.ElapsedMilliseconds:N0}ms");
+        Console.WriteLine($"  {rows:N0} channel rows and the search indexes rebuilt in {stopwatch.ElapsedMilliseconds:N0}ms");
         return 0;
     }
 
