@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Runtime.InteropServices;
@@ -13,7 +14,10 @@ using Iptv.Mpv;
 using Microsoft.Data.Sqlite;
 using Microsoft.UI.Dispatching;
 using Microsoft.UI.Xaml;
+using Microsoft.UI.Windowing;
 using Microsoft.UI.Xaml.Controls;
+using Microsoft.UI.Xaml.Input;
+using VirtualKey = Windows.System.VirtualKey;
 
 namespace Iptv.App;
 
@@ -117,6 +121,7 @@ public sealed partial class MainWindow : Window
     private int _stallSeconds;
     private readonly DispatcherQueueTimer _firstFrameDeadline;
     private readonly DispatcherQueueTimer _stallWatch;
+    private readonly DispatcherQueueTimer _toastTimer;
 
     public MainWindow()
     {
@@ -182,6 +187,14 @@ public sealed partial class MainWindow : Window
         _stallWatch.Interval = TimeSpan.FromSeconds(1);
         _stallWatch.Tick += async (_, _) => await CheckForStallAsync();
         _stallWatch.Start();
+
+        _toastTimer = DispatcherQueue.CreateTimer();
+        _toastTimer.Interval = TimeSpan.FromMilliseconds(1200);
+        _toastTimer.IsRepeating = false;
+        _toastTimer.Tick += (_, _) => ToastPanel.Visibility = Visibility.Collapsed;
+
+        // Key presses need somewhere to land before anything has been clicked.
+        RootGrid.Loaded += (_, _) => RootGrid.Focus(FocusState.Programmatic);
 
         Closed += OnClosed;
 
@@ -434,7 +447,11 @@ public sealed partial class MainWindow : Window
             ["vo"] = "libmpv",
             ["idle"] = "yes",
             ["keep-open"] = "yes",
-            ["audio"] = "no",
+            // Audio on. It was disabled during the render debugging so a silent picture
+            // could not be mistaken for a broken one, and a television that cannot make
+            // a sound is not a television.
+            ["volume"] = "70",
+            ["volume-max"] = "130",
             ["hwdec"] = "auto-safe",
             ["profile"] = "low-latency",
             ["cache"] = "yes",
@@ -646,8 +663,17 @@ public sealed partial class MainWindow : Window
         }
 
         _session = session;
+
+        // Where the arrow keys step from. Looked up rather than passed in, because a
+        // channel can also be reached by clicking, and both have to leave the same trail.
+        _playingIndex = _rows.IndexOf(row);
+
         ChannelTitle.Text = row.Title;
         ProgrammeTitle.Text = row.Subtitle;
+
+        // Back to the root, so the next arrow press changes channel instead of scrolling
+        // the list button that was just clicked.
+        RootGrid.Focus(FocusState.Programmatic);
 
         await OpenCurrentAsync("opening...");
     }
@@ -758,6 +784,203 @@ public sealed partial class MainWindow : Window
         Log($"panel resized to {e.NewSize.Width:F0}x{e.NewSize.Height:F0} logical, {width}x{height} physical");
     }
 
+    // --- watching, rather than demonstrating ---
+
+    private int _volume = 70;
+    private bool _muted;
+    private bool _fullScreen;
+
+    /// <summary>Index into <see cref="_rows"/> of what is playing, for channel up/down.</summary>
+    private int _playingIndex = -1;
+
+    /// <summary>
+    /// The remote control.
+    /// </summary>
+    /// <remarks>
+    /// Handled on the root grid so a press lands wherever focus happens to be. Typing in
+    /// the search box must not change channel, so text input is excluded explicitly rather
+    /// than relying on a KeyboardAccelerator's own idea of when a text control is active.
+    /// </remarks>
+    private async void OnKeyDown(object sender, KeyRoutedEventArgs e)
+    {
+        if (FocusManager.GetFocusedElement(RootGrid.XamlRoot) is TextBox)
+        {
+            // Escape still gets out, because a search box you cannot leave without the
+            // mouse is worse than no shortcut at all.
+            if (e.Key == VirtualKey.Escape)
+            {
+                RootGrid.Focus(FocusState.Programmatic);
+                e.Handled = true;
+            }
+
+            return;
+        }
+
+        switch (e.Key)
+        {
+            case VirtualKey.F:
+                SetFullScreen(!_fullScreen);
+                break;
+
+            case VirtualKey.Escape:
+                if (_fullScreen)
+                {
+                    SetFullScreen(false);
+                }
+
+                break;
+
+            case VirtualKey.Space:
+                TogglePause();
+                break;
+
+            case VirtualKey.M:
+                ToggleMute();
+                break;
+
+            case VirtualKey.Left:
+                AdjustVolume(-5);
+                break;
+
+            case VirtualKey.Right:
+                AdjustVolume(+5);
+                break;
+
+            case VirtualKey.Up:
+                await StepChannelAsync(-1);
+                break;
+
+            case VirtualKey.Down:
+                await StepChannelAsync(+1);
+                break;
+
+            default:
+                return;
+        }
+
+        // Only for keys actually consumed. Marking everything handled would swallow Tab
+        // and the arrow keys the list itself needs.
+        e.Handled = true;
+    }
+
+    /// <summary>Moves to the next or previous entry in the list that is playable.</summary>
+    /// <remarks>
+    /// Separator rows are in the list on purpose — they are the provider's own grouping and
+    /// read as headings — but stepping onto one would open nothing. Skipped rather than
+    /// filtered out, so the visible order still matches what stepping does.
+    /// </remarks>
+    private async Task StepChannelAsync(int direction)
+    {
+        if (_rows.Count == 0)
+        {
+            return;
+        }
+
+        var index = _playingIndex < 0 ? (direction > 0 ? -1 : 0) : _playingIndex;
+
+        for (var step = 0; step < _rows.Count; step++)
+        {
+            index += direction;
+
+            if (index < 0)
+            {
+                index = _rows.Count - 1;
+            }
+            else if (index >= _rows.Count)
+            {
+                index = 0;
+            }
+
+            if (_rows[index].Playable)
+            {
+                await PlayAsync(_rows[index]);
+                return;
+            }
+        }
+    }
+
+    private void TogglePause()
+    {
+        if (_handle is null || _session?.Current is null)
+        {
+            return;
+        }
+
+        var paused = !string.Equals(_handle.GetProperty("pause"), "yes", StringComparison.Ordinal);
+        _handle.SetProperty("pause", paused ? "yes" : "no");
+
+        // A paused live stream keeps its connection open and falls behind. Saying so is
+        // more honest than letting the user discover it as latency when they resume.
+        Toast(paused ? "Paused" : "Playing");
+    }
+
+    private void AdjustVolume(int delta)
+    {
+        if (_handle is null)
+        {
+            return;
+        }
+
+        _volume = Math.Clamp(_volume + delta, 0, 130);
+        _muted = false;
+
+        _handle.SetProperty("mute", "no");
+        _handle.SetProperty("volume", _volume.ToString(CultureInfo.InvariantCulture));
+
+        Toast($"Volume {_volume}%");
+    }
+
+    private void ToggleMute()
+    {
+        if (_handle is null)
+        {
+            return;
+        }
+
+        _muted = !_muted;
+        _handle.SetProperty("mute", _muted ? "yes" : "no");
+        Toast(_muted ? "Muted" : $"Volume {_volume}%");
+    }
+
+    private void OnVideoDoubleTapped(object sender, DoubleTappedRoutedEventArgs e)
+    {
+        SetFullScreen(!_fullScreen);
+        e.Handled = true;
+    }
+
+    /// <summary>Fills the screen with video, hiding the list and the overlay.</summary>
+    /// <remarks>
+    /// The presenter change and the sidebar collapse have to happen together. Going
+    /// fullscreen with the 380px list still there gives a fullscreen window showing a
+    /// channel list, which is not what anybody means by fullscreen.
+    /// </remarks>
+    private void SetFullScreen(bool on)
+    {
+        _fullScreen = on;
+
+        AppWindow.SetPresenter(on
+            ? AppWindowPresenterKind.FullScreen
+            : AppWindowPresenterKind.Overlapped);
+
+        SidebarColumn.Width = on ? new GridLength(0) : new GridLength(380);
+        Sidebar.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+        TitleOverlay.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
+
+        // Focus follows, or the next key press goes to whatever the list left focused and
+        // Escape cannot get back out.
+        RootGrid.Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>Shows a message over the video for a moment.</summary>
+    private void Toast(string message)
+    {
+        ToastText.Text = message;
+        ToastPanel.Visibility = Visibility.Visible;
+
+        _toastTimer.Stop();
+        _toastTimer.Start();
+    }
+
     private void OnSearchChanged(object sender, TextChangedEventArgs e)
     {
         // Restarting the timer on each keystroke is the debounce; the query only runs once
@@ -772,6 +995,7 @@ public sealed partial class MainWindow : Window
         _heartbeat.Stop();
         _firstFrameDeadline.Stop();
         _stallWatch.Stop();
+        _toastTimer.Stop();
         _session = null;
 
         // Release the provider slot before anything else: the stream must be given back

@@ -13,13 +13,21 @@
         Note: a double hyphen is illegal inside an XML comment, and the XAML compiler
         fails with no message at all when it meets one.
     -->
-    <Grid Background="#FF101014">
+    <!--
+        IsTabStop so the root can hold focus and receive key presses. Without it the
+        shortcuts only work while some child happens to be focused, which in practice
+        means they work right after clicking a channel and never again.
+    -->
+    <Grid x:Name="RootGrid"
+          Background="#FF101014"
+          IsTabStop="True"
+          KeyDown="OnKeyDown">
         <Grid.ColumnDefinitions>
-            <ColumnDefinition Width="380" />
+            <ColumnDefinition x:Name="SidebarColumn" Width="380" />
             <ColumnDefinition Width="*" />
         </Grid.ColumnDefinitions>
 
-        <Grid Grid.Column="0" Background="#FF16161C">
+        <Grid x:Name="Sidebar" Grid.Column="0" Background="#FF16161C">
             <Grid.RowDefinitions>
                 <RowDefinition Height="Auto" />
                 <RowDefinition Height="*" />
@@ -91,10 +99,11 @@
         </Grid>
 
         <Grid Grid.Column="1">
-            <SwapChainPanel x:Name="VideoPanel" />
+            <SwapChainPanel x:Name="VideoPanel" DoubleTapped="OnVideoDoubleTapped" />
 
             <!-- Auto-hiding overlay would come later; always visible in the slice. -->
-            <Border VerticalAlignment="Top"
+            <Border x:Name="TitleOverlay"
+                    VerticalAlignment="Top"
                     Background="#B0000000"
                     Padding="20,14">
                 <StackPanel Spacing="2">
@@ -106,7 +115,25 @@
                     <TextBlock x:Name="ProgrammeTitle"
                                FontSize="13"
                                Foreground="#CCFFFFFF" />
+                    <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · M mute"
+                               FontSize="11"
+                               Margin="0,4,0,0"
+                               Foreground="#88FFFFFF" />
                 </StackPanel>
+            </Border>
+
+            <!-- Volume and pause feedback, shown briefly on change then hidden. -->
+            <Border x:Name="ToastPanel"
+                    VerticalAlignment="Center"
+                    HorizontalAlignment="Center"
+                    Background="#C0000000"
+                    CornerRadius="8"
+                    Padding="28,18"
+                    Visibility="Collapsed">
+                <TextBlock x:Name="ToastText"
+                           FontSize="24"
+                           FontWeight="SemiBold"
+                           Foreground="White" />
             </Border>
 
             <Border VerticalAlignment="Bottom"
