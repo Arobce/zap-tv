@@ -280,10 +280,17 @@ public sealed class SharedVideoTarget : IDisposable
 
         try
         {
-            // flipY: GL renders bottom-up, D3D and XAML expect top-down. Without this the
-            // picture is perfect and upside down, which is easy to misdiagnose as a driver
-            // fault rather than an orientation convention.
-            renderer.Render(Framebuffer, Width, Height, flipY: true);
+            // No flip. The reasoning that says otherwise is that GL's framebuffer origin
+            // is bottom-left and D3D's is top-left, so the picture must need inverting -
+            // and that reasoning is wrong here, because NV_DX_interop shares the texture's
+            // memory rather than copying through either API's coordinate space. GL's first
+            // row and D3D's first row are the same bytes, so mpv's unflipped output already
+            // lands the right way up and FLIP_Y turns it over.
+            //
+            // Asserted rather than argued: VideoOrientationTests renders a red-over-blue
+            // source and reads the texture back. This shipped upside down for weeks because
+            // every check asked whether frames arrived, never which way up.
+            renderer.Render(Framebuffer, Width, Height, flipY: false);
         }
         finally
         {

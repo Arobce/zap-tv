@@ -152,7 +152,11 @@ public sealed partial class MainWindow : Window
             }
 
             var frames = _presenter.FramesPresented;
-            Log($"heartbeat: frames={frames} loops={_presenter.LoopIterations} backend={_presenter.Backend} fault={_presenter.Fault?.Message ?? "none"}");
+            Log($"heartbeat: frames={frames} loops={_presenter.LoopIterations} " +
+                $"backend={_presenter.Backend} scale={_presenter.CompositionScaleApplied:F2} " +
+                $"fault={_presenter.Fault?.Message ?? "none"} " +
+                $"resizeFailed={_presenter.ResizeFailed?.Message ?? "none"} " +
+                $"scaleFailed={_presenter.ScaleFailed?.Message ?? "none"}");
 
             var elapsed = _switchTimer is { } t ? $" · {t.ElapsedMilliseconds}ms" : string.Empty;
             var provider = _session is { HasFailedOver: true, Current: { } current }
@@ -486,6 +490,13 @@ public sealed partial class MainWindow : Window
             // the panel had at startup and the picture is stretched on every resize, which
             // the PRD lists as a Phase 0.2 requirement.
             VideoPanel.SizeChanged += OnVideoPanelSizeChanged;
+            VideoPanel.CompositionScaleChanged += OnCompositionScaleChanged;
+
+            // Applied once up front. Without this the very first frames are cropped until
+            // something happens to resize the panel.
+            _presenter.SetCompositionScale(
+                VideoPanel.CompositionScaleX <= 0 ? 1.0 : VideoPanel.CompositionScaleX,
+                VideoPanel.CompositionScaleY <= 0 ? 1.0 : VideoPanel.CompositionScaleY);
 
             Log($"swap chain attached; backend={_presenter.Backend} detail={_presenter.BackendDetail}; panel {VideoPanel.ActualWidth}x{VideoPanel.ActualHeight}");
 
@@ -780,8 +791,28 @@ public sealed partial class MainWindow : Window
         var width = (int)Math.Round(e.NewSize.Width * scale);
         var height = (int)Math.Round(e.NewSize.Height * scaleY);
 
+        // Scale before size. A composition swap chain is drawn into the panel's logical
+        // space one chain pixel per logical unit, so a chain sized in physical pixels needs
+        // the inverse transform or the panel shows its top-left corner and crops the rest.
+        _presenter?.SetCompositionScale(scale, scaleY);
         _presenter?.Resize(width, height);
-        Log($"panel resized to {e.NewSize.Width:F0}x{e.NewSize.Height:F0} logical, {width}x{height} physical");
+
+        Log($"panel resized to {e.NewSize.Width:F0}x{e.NewSize.Height:F0} logical, " +
+            $"{width}x{height} physical, scale {scale:F2}");
+    }
+
+    /// <summary>Keeps the transform right when the window moves to a different display.</summary>
+    private void OnCompositionScaleChanged(SwapChainPanel sender, object args)
+    {
+        var scale = sender.CompositionScaleX <= 0 ? 1.0 : sender.CompositionScaleX;
+        var scaleY = sender.CompositionScaleY <= 0 ? 1.0 : sender.CompositionScaleY;
+
+        _presenter?.SetCompositionScale(scale, scaleY);
+        _presenter?.Resize(
+            (int)Math.Round(sender.ActualWidth * scale),
+            (int)Math.Round(sender.ActualHeight * scaleY));
+
+        Log($"composition scale changed to {scale:F2}x{scaleY:F2}");
     }
 
     // --- watching, rather than demonstrating ---
