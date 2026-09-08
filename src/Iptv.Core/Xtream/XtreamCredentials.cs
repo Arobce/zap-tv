@@ -64,6 +64,14 @@ public sealed class XtreamCredentials
     public Uri BuildSeriesUrl(long episodeId, string containerExtension)
         => new($"{_baseUrl}/series/{_escapedUsername}/{_escapedPassword}/{episodeId}.{Normalize(containerExtension)}");
 
+    /// <summary>The XMLTV guide for this account.</summary>
+    /// <remarks>
+    /// A separate endpoint from player_api.php, and not an action on it. Panels that serve
+    /// the guide at all serve it here.
+    /// </remarks>
+    public Uri BuildEpgUrl()
+        => new($"{_baseUrl}/xmltv.php?username={_escapedUsername}&password={_escapedPassword}");
+
     /// <summary>The values that must never appear in a log or export.</summary>
     public IReadOnlyList<string> Secrets => [Username, Password, _escapedUsername, _escapedPassword];
 
