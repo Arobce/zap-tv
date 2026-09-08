@@ -19,6 +19,7 @@ public sealed class MigratorTests
         var tables = await TableNamesAsync(connection);
         Assert.Equal(
             [
+                "categories",
                 "channels",
                 "epg_channels",
                 "epg_map",

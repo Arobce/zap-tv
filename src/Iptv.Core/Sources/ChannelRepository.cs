@@ -13,6 +13,9 @@ public sealed record ChannelQuery
     public int Offset { get; init; }
 
     public bool FavouritesOnly { get; init; }
+
+    /// <summary>Provider category name to restrict to. Null shows every category.</summary>
+    public string? Category { get; init; }
 }
 
 /// <summary>One row of the channel list, with its guide.</summary>
@@ -95,12 +98,22 @@ public static class ChannelRepository
             WHERE c.is_hidden = 0
               AND (@search IS NULL OR c.display_name LIKE '%' || @search || '%')
               AND (@favourites = 0 OR c.is_favorite = 1)
-              -- A channel exists only if some active, non-separator stream backs it.
+              -- A channel exists only if some active, non-separator stream backs it, and
+              -- when a category is chosen, only if one of those streams is in it. Matched
+              -- on the category's name rather than its id, because two providers use
+              -- different ids for the same "Sports" and the user picked the name.
               AND EXISTS (
                   SELECT 1 FROM streams s
                    WHERE s.channel_key = c.channel_key
                      AND s.is_active = 1
-                     AND s.is_separator = 0)
+                     AND s.is_separator = 0
+                     AND s.kind = 'live'
+                     AND (@category IS NULL OR EXISTS (
+                            SELECT 1 FROM categories cat
+                             WHERE cat.provider_id = s.provider_id
+                               AND cat.kind        = 'live'
+                               AND cat.category_id = s.category_id
+                               AND cat.name        = @category)))
             ORDER BY
                 c.is_favorite DESC,
                 COALESCE(c.user_sort_order, 2147483647),
@@ -111,6 +124,7 @@ public static class ChannelRepository
         command.Parameters.AddWithValue("@at", at);
         command.Parameters.AddWithValue("@search", (object?)query.Search ?? DBNull.Value);
         command.Parameters.AddWithValue("@favourites", query.FavouritesOnly ? 1 : 0);
+        command.Parameters.AddWithValue("@category", (object?)query.Category ?? DBNull.Value);
         command.Parameters.AddWithValue("@limit", query.Limit);
         command.Parameters.AddWithValue("@offset", query.Offset);
 

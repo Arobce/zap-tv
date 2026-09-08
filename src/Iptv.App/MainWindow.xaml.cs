@@ -223,6 +223,12 @@ public sealed partial class MainWindow : Window
             }
 
             UpdateModeButtons();
+
+            await using (var connection = await OpenAsync())
+            {
+                await LoadCategoriesAsync(connection);
+            }
+
             await LoadLibraryAsync(null);
         }
         catch (Exception exception)
@@ -348,7 +354,7 @@ public sealed partial class MainWindow : Window
             {
                 var films = await LibraryRepository.GetFilmsAsync(
                     connection,
-                    new CatalogueQuery { Search = term, Limit = 500 },
+                    new CatalogueQuery { Search = term, Category = _category, Limit = 500 },
                     CancellationToken.None);
 
                 foreach (var film in films)
@@ -361,7 +367,7 @@ public sealed partial class MainWindow : Window
                 // keystroke would double the cost of every search for a number nobody
                 // reads while typing.
                 summary = term is null
-                    ? $"{_rows.Count:N0} of {await LibraryRepository.CountFilmsAsync(connection, new CatalogueQuery(), CancellationToken.None):N0} films"
+                    ? $"{_rows.Count:N0} of {await LibraryRepository.CountFilmsAsync(connection, new CatalogueQuery { Category = _category }, CancellationToken.None):N0} films"
                     : $"{_rows.Count:N0} films matching";
                 break;
             }
@@ -386,7 +392,7 @@ public sealed partial class MainWindow : Window
             {
                 var channels = await ChannelRepository.GetChannelsAsync(
                     connection,
-                    new ChannelQuery { Search = term, Limit = 500 },
+                    new ChannelQuery { Search = term, Category = _category, Limit = 500 },
                     DateTimeOffset.UtcNow,
                     CancellationToken.None);
 
@@ -582,6 +588,7 @@ public sealed partial class MainWindow : Window
         }
 
         _mode = mode;
+        _category = null;
         UpdateModeButtons();
 
         // The search term does not carry across catalogues: a term that matched channels
@@ -592,6 +599,11 @@ public sealed partial class MainWindow : Window
 
         try
         {
+            await using (var connection = await OpenAsync())
+            {
+                await LoadCategoriesAsync(connection);
+            }
+
             await LoadLibraryAsync(null);
         }
         catch (Exception exception)
@@ -1010,6 +1022,78 @@ public sealed partial class MainWindow : Window
 
         _toastTimer.Stop();
         _toastTimer.Start();
+    }
+
+    /// <summary>The chosen category name, or null for all of them.</summary>
+    private string? _category;
+
+    /// <summary>Guards the combo's own repopulation from being read as a user choice.</summary>
+    /// <remarks>
+    /// Assigning ItemsSource raises SelectionChanged. Without this, switching from Live to
+    /// Films would reload the list twice and the second reload would carry a category from
+    /// the catalogue that was just left.
+    /// </remarks>
+    private bool _loadingCategories;
+
+    /// <summary>Fills the category picker for whichever catalogue is showing.</summary>
+    private async Task LoadCategoriesAsync(SqliteConnection connection)
+    {
+        // Series have no categories to load: the provider publishes them but the series
+        // table has no column to join them to, so the picker is emptied rather than left
+        // showing the previous catalogue's.
+        if (_mode == LibraryKind.Series)
+        {
+            _loadingCategories = true;
+            CategoryBox.ItemsSource = null;
+            CategoryBox.IsEnabled = false;
+            _loadingCategories = false;
+            return;
+        }
+
+        var categories = await CategoryRepository.GetCategoriesAsync(
+            connection,
+            _mode == LibraryKind.Film ? CategoryKind.Vod : CategoryKind.Live,
+            CancellationToken.None);
+
+        // "All categories" is a row rather than a cleared selection, because a ComboBox
+        // with no way back to unfiltered is a trap.
+        var names = new List<string> { AllCategories };
+        names.AddRange(categories.Select(c => $"{c.Name}  ({c.Count:N0})"));
+
+        _loadingCategories = true;
+        CategoryBox.ItemsSource = names;
+        CategoryBox.SelectedIndex = 0;
+        CategoryBox.IsEnabled = categories.Count > 0;
+        _loadingCategories = false;
+
+        _category = null;
+    }
+
+    private const string AllCategories = "All categories";
+
+    private async void OnCategoryChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_loadingCategories || CategoryBox.SelectedItem is not string selected)
+        {
+            return;
+        }
+
+        // The count is display only; the query matches on the name the provider gave.
+        // Trimming it back off here keeps the list rows and the filter in one place rather
+        // than storing a parallel list of names beside the one being shown.
+        _category = selected == AllCategories
+            ? null
+            : selected[..selected.LastIndexOf("  (", StringComparison.Ordinal)];
+
+        try
+        {
+            await LoadLibraryAsync(SearchBox.Text);
+        }
+        catch (Exception exception)
+        {
+            Log($"category filter failed: {exception}");
+            CountText.Text = $"filter failed: {exception.Message}";
+        }
     }
 
     private void OnSearchChanged(object sender, TextChangedEventArgs e)

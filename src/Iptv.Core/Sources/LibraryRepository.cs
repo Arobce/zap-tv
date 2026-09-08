@@ -11,6 +11,9 @@ public sealed record CatalogueQuery
     public int Limit { get; init; } = 100;
 
     public int Offset { get; init; }
+
+    /// <summary>Provider category name to restrict to. Null shows every category.</summary>
+    public string? Category { get; init; }
 }
 
 /// <summary>One film or series, shaped for a poster grid.</summary>
@@ -82,6 +85,12 @@ public static class LibraryRepository
               AND s.is_active = 1
               AND s.is_separator = 0
               AND (@search IS NULL OR s.title LIKE '%' || @search || '%')
+              AND (@category IS NULL OR EXISTS (
+                     SELECT 1 FROM categories cat
+                      WHERE cat.provider_id = s.provider_id
+                        AND cat.kind        = 'vod'
+                        AND cat.category_id = s.category_id
+                        AND cat.name        = @category))
             GROUP BY s.channel_key
             ORDER BY min(s.title)
             LIMIT @limit OFFSET @offset;
@@ -170,10 +179,17 @@ public static class LibraryRepository
             WHERE s.kind = 'vod'
               AND s.is_active = 1
               AND s.is_separator = 0
-              AND (@search IS NULL OR s.title LIKE '%' || @search || '%');
+              AND (@search IS NULL OR s.title LIKE '%' || @search || '%')
+              AND (@category IS NULL OR EXISTS (
+                     SELECT 1 FROM categories cat
+                      WHERE cat.provider_id = s.provider_id
+                        AND cat.kind        = 'vod'
+                        AND cat.category_id = s.category_id
+                        AND cat.name        = @category));
             """;
 
         command.Parameters.AddWithValue("@search", (object?)query.Search ?? DBNull.Value);
+        command.Parameters.AddWithValue("@category", (object?)query.Category ?? DBNull.Value);
 
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null or DBNull ? 0 : Convert.ToInt32(value);
@@ -182,6 +198,7 @@ public static class LibraryRepository
     private static void AddParameters(SqliteCommand command, CatalogueQuery query)
     {
         command.Parameters.AddWithValue("@search", (object?)query.Search ?? DBNull.Value);
+        command.Parameters.AddWithValue("@category", (object?)query.Category ?? DBNull.Value);
         command.Parameters.AddWithValue("@limit", query.Limit);
         command.Parameters.AddWithValue("@offset", query.Offset);
     }
