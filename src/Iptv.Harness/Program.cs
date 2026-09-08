@@ -35,7 +35,7 @@ internal static class Program
                 "browse" => await BrowseAsync(CancellationToken.None).ConfigureAwait(false),
                 "failover" => await FailoverSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 "drill" => await FailoverDrill.RunAsync(CancellationToken.None).ConfigureAwait(false),
-                "categories" => await CategoriesAsync(CancellationToken.None).ConfigureAwait(false),
+                "categories" => await CategoriesAsync(args, CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -62,7 +62,7 @@ internal static class Program
         Console.WriteLine("  browse          Time the VOD and series catalogue queries; no network");
         Console.WriteLine("  failover        Survey what the failover safety guard refuses; no network");
         Console.WriteLine("  drill           Drive a real failover against a dead URL; no provider");
-        Console.WriteLine("  categories      Refresh provider category names only; two small requests");
+        Console.WriteLine("  categories [x]  Refresh provider category names; lists those matching x");
         return 1;
     }
 
@@ -732,8 +732,12 @@ internal static class Program
     /// far more slowly than the catalogue does, and refetching a quarter of a million rows
     /// to learn that "Sports" is still called Sports is not a reasonable trade.
     /// </remarks>
-    private static async Task<int> CategoriesAsync(CancellationToken cancellationToken)
+    private static async Task<int> CategoriesAsync(string[] args, CancellationToken cancellationToken)
     {
+        // Optional filter, so "is category X actually there" is one command rather than
+        // scrolling 389 names.
+        var filter = args.Length > 1 ? args[1] : null;
+
         if (LoadCredentials() is not { } credentials)
         {
             Console.Error.WriteLine(
@@ -772,15 +776,63 @@ internal static class Program
             // Non-empty is the number that matters. A provider ships categories holding
             // nothing, and those are not offered to the user.
             Console.WriteLine($"  {kind,-5} {listed.Count:N0} non-empty categories");
-            foreach (var category in listed.Take(8))
+
+            var shown = filter is null ? listed.Take(8) : listed.Where(c => Matches(c.Name, filter));
+            foreach (var category in shown)
             {
-                Console.WriteLine($"    {category.Name,-40} {category.Count,7:N0}");
+                Console.WriteLine($"    {category.Name,-46} {category.Count,7:N0}");
             }
         }
+
+        // Streams whose category id names nothing. These are channels the picker cannot
+        // reach at all, so a non-zero number here is the difference between "the provider
+        // does not have that category" and "we lost it".
+        Console.WriteLine();
+        Console.WriteLine("== unnamed categories ==");
+        await ReportOrphansAsync(connection, cancellationToken).ConfigureAwait(false);
 
         Console.WriteLine();
         Console.WriteLine($"  done in {stopwatch.ElapsedMilliseconds:N0}ms");
         return 0;
+
+        static bool Matches(string name, string term)
+            => name.Contains(term, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>Reports stream category ids that no category row names.</summary>
+    private static async Task ReportOrphansAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT s.kind, count(DISTINCT s.category_id), count(*)
+            FROM streams s
+            WHERE s.is_active = 1
+              AND s.is_separator = 0
+              AND s.category_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM categories c
+                   WHERE c.provider_id = s.provider_id
+                     AND c.category_id = s.category_id
+                     AND c.kind = CASE s.kind WHEN 'live' THEN 'live' ELSE 'vod' END)
+            GROUP BY s.kind;
+            """;
+
+        var any = false;
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            any = true;
+            Console.WriteLine(
+                $"  {reader.GetString(0),-8} {reader.GetInt32(1),4} unnamed ids covering {reader.GetInt32(2):N0} streams");
+        }
+
+        if (!any)
+        {
+            Console.WriteLine("  none - every stream's category has a name");
+        }
     }
 
     /// <summary>Stores the provider's category names for live and VOD.</summary>
