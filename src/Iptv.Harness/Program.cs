@@ -36,6 +36,8 @@ internal static class Program
                 "failover" => await FailoverSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 "drill" => await FailoverDrill.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 "categories" => await CategoriesAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "kinds" => await KindLeakSurvey.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "rebuild" => await RebuildChannelsAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -63,6 +65,8 @@ internal static class Program
         Console.WriteLine("  failover        Survey what the failover safety guard refuses; no network");
         Console.WriteLine("  drill           Drive a real failover against a dead URL; no provider");
         Console.WriteLine("  categories [x]  Refresh provider category names; lists those matching x");
+        Console.WriteLine("  kinds [term]    Report live/VOD key collisions; no network");
+        Console.WriteLine("  rebuild         Recompute channel names from live streams; no network");
         return 1;
     }
 
@@ -109,6 +113,34 @@ internal static class Program
         await TimeAsync("search series", async () =>
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Search = "the", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
 
+        return 0;
+    }
+
+    /// <summary>Recomputes the channels table from the live streams.</summary>
+    /// <remarks>
+    /// Needed because RefreshChannelsAsync only ran during a sync, so a fix to how names are
+    /// chosen would otherwise not reach an existing library until the next full refetch.
+    /// <para>
+    /// Nothing is deleted. Rows for keys that no live stream backs are left alone rather
+    /// than pruned - channels is user-owned, carrying favourites, hidden state and sort
+    /// order, and the list query already excludes them.
+    /// </para>
+    /// </remarks>
+    private static async Task<int> RebuildChannelsAsync(CancellationToken cancellationToken)
+    {
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer", "harness.db");
+
+        await using var connection = await new SqliteConnectionFactory(databasePath)
+            .OpenAsync(cancellationToken).ConfigureAwait(false);
+        await Migrator.MigrateAsync(connection, cancellationToken).ConfigureAwait(false);
+
+        var stopwatch = Stopwatch.StartNew();
+        var rows = await ProviderSync.RefreshChannelsAsync(connection, cancellationToken).ConfigureAwait(false);
+        stopwatch.Stop();
+
+        Console.WriteLine($"  {rows:N0} channel rows rewritten in {stopwatch.ElapsedMilliseconds:N0}ms");
         return 0;
     }
 

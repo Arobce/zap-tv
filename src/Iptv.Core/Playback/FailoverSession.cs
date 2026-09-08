@@ -1,3 +1,4 @@
+using Iptv.Core.Sources;
 using Microsoft.Data.Sqlite;
 
 namespace Iptv.Core.Playback;
@@ -50,12 +51,13 @@ public sealed class FailoverSession
     public static async Task<FailoverSession> StartAsync(
         SqliteConnection connection,
         string channelKey,
+        StreamKind kind,
         DateTimeOffset now,
         QualityPreference preference,
         CancellationToken cancellationToken)
     {
         var plan = await StreamHealthRepository
-            .PlanAsync(connection, channelKey, now, preference, cancellationToken)
+            .PlanAsync(connection, channelKey, kind, now, preference, cancellationToken)
             .ConfigureAwait(false);
 
         return new FailoverSession(channelKey, plan);

@@ -63,6 +63,7 @@ public static class StreamHealthRepository
     public static async Task<IReadOnlyList<StreamCandidate>> GetCandidatesAsync(
         SqliteConnection connection,
         string channelKey,
+        StreamKind kind,
         DateTimeOffset now,
         CancellationToken cancellationToken)
     {
@@ -96,10 +97,16 @@ public static class StreamHealthRepository
               AND s.is_active = 1
               AND s.is_separator = 0
               AND pr.enabled = 1
+              -- Scoped to the kind the key came from. The safety guard below compares
+              -- countries and titles, and neither would stop a film standing in for a
+              -- live channel of the same name: they share a key precisely because the
+              -- titles match.
+              AND s.kind = @kind
             GROUP BY s.id;
             """;
 
         command.Parameters.AddWithValue("@key", channelKey);
+        command.Parameters.AddWithValue("@kind", ChannelRepository.StreamKindStorage(kind));
         command.Parameters.AddWithValue("@since", (now - RollingWindow).ToUnixTimeSeconds());
 
         var results = new List<StreamCandidate>();
@@ -135,11 +142,12 @@ public static class StreamHealthRepository
     public static async Task<FailoverPlan> PlanAsync(
         SqliteConnection connection,
         string channelKey,
+        StreamKind kind,
         DateTimeOffset now,
         QualityPreference preference,
         CancellationToken cancellationToken)
     {
-        var candidates = await GetCandidatesAsync(connection, channelKey, now, cancellationToken)
+        var candidates = await GetCandidatesAsync(connection, channelKey, kind, now, cancellationToken)
             .ConfigureAwait(false);
 
         return FailoverPolicy.Plan(channelKey, candidates, preference);

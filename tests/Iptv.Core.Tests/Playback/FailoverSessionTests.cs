@@ -55,7 +55,7 @@ public sealed class FailoverSessionTests
 
     private static Task<FailoverSession> StartAsync(SqliteConnection connection)
         => FailoverSession.StartAsync(
-            connection, "tvg:espn.us", Now, QualityPreference.Highest, CancellationToken.None);
+            connection, "tvg:espn.us", StreamKind.Live, Now, QualityPreference.Highest, CancellationToken.None);
 
     private static Task<StreamCandidate?> ReportAsync(
         FailoverSession session,

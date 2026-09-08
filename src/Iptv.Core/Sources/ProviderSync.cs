@@ -146,15 +146,24 @@ public static class ProviderSync
                 -- fuller name is the more useful label.
                 (SELECT t.title FROM streams t
                   WHERE t.channel_key = s.channel_key AND t.is_separator = 0
+                    AND t.kind = 'live'
                   ORDER BY length(t.title) DESC, t.title ASC LIMIT 1),
                 (SELECT t.logo_url FROM streams t
                   WHERE t.channel_key = s.channel_key AND t.logo_url IS NOT NULL
+                    AND t.kind = 'live'
                   LIMIT 1),
                 (SELECT t.country FROM streams t
                   WHERE t.channel_key = s.channel_key AND t.country IS NOT NULL
+                    AND t.kind = 'live'
                   LIMIT 1)
             FROM streams s
             WHERE s.is_separator = 0
+              -- Live only. channels is the live-TV identity; films and episodes have their
+              -- own catalogue. channel_key is derived from the normalized title alone, so
+              -- a film called "Honey" and a channel called "Honey" are the same key, and
+              -- without this the longest title wins across kinds and the channel is listed
+              -- under the film's name. Measured: 23 keys, 7 visibly mislabelled.
+              AND s.kind = 'live'
             GROUP BY s.channel_key
             ON CONFLICT(channel_key) DO UPDATE SET
                 display_name = excluded.display_name,

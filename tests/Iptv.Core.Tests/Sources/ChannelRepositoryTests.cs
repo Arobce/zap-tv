@@ -226,7 +226,7 @@ public sealed class ChannelRepositoryTests
         await AddAsync(connection, "tvg:a", "Alpha", providerId: 1);
 
         var url = await ChannelRepository.GetPlaybackUrlAsync(
-            connection, "tvg:a", CancellationToken.None);
+            connection, "tvg:a", StreamKind.Live, CancellationToken.None);
 
         Assert.Contains("/1-x.ts", url, StringComparison.Ordinal);
     }
@@ -240,7 +240,7 @@ public sealed class ChannelRepositoryTests
         await AddAsync(connection, "tvg:a", "Alpha UHD", quality: "Uhd");
 
         var url = await ChannelRepository.GetPlaybackUrlAsync(
-            connection, "tvg:a", CancellationToken.None);
+            connection, "tvg:a", StreamKind.Live, CancellationToken.None);
 
         Assert.NotNull(url);
 
@@ -261,7 +261,7 @@ public sealed class ChannelRepositoryTests
         await ExecuteAsync(connection, "UPDATE streams SET is_active = 0;");
 
         Assert.Null(await ChannelRepository.GetPlaybackUrlAsync(
-            connection, "tvg:a", CancellationToken.None));
+            connection, "tvg:a", StreamKind.Live, CancellationToken.None));
     }
 
     private static async Task ExecuteAsync(SqliteConnection connection, string sql)
