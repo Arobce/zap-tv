@@ -47,6 +47,8 @@ public sealed class VideoPresenter : IDisposable
     private long _loopIterations;
     private long _pendingSize;
     private long _resizes;
+    private long _compositionScale;
+    private long _scaleDirty;
 
     public VideoPresenter(MpvHandle handle, int width, int height)
     {
@@ -85,6 +87,12 @@ public sealed class VideoPresenter : IDisposable
 
     /// <summary>The last resize failure, or null. Playback continues at the old size.</summary>
     public Exception? ResizeFailed { get; private set; }
+
+    /// <summary>The composition scale actually applied to the swap chain, for diagnostics.</summary>
+    public double CompositionScaleApplied { get; private set; }
+
+    /// <summary>Why the inverse-scale transform could not be applied, if it could not.</summary>
+    public Exception? ScaleFailed { get; private set; }
 
     /// <summary>Iterations of the present loop, whether or not a frame was ready.</summary>
     /// <remarks>
@@ -197,6 +205,73 @@ public sealed class VideoPresenter : IDisposable
         Interlocked.Exchange(ref _pendingSize, ((long)width << 32) | (uint)height);
     }
 
+    /// <summary>
+    /// Tells the presenter how many physical pixels the panel draws per logical unit.
+    /// </summary>
+    /// <remarks>
+    /// A composition swap chain is composited into the panel's <b>logical</b> coordinate
+    /// space at one swap-chain pixel per logical unit, and is not scaled to fit. So a chain
+    /// sized in physical pixels for a 150% display is 1.5x too large for the space it is
+    /// drawn into, and the panel shows its top-left corner and crops the rest.
+    /// <para>
+    /// The fix is an inverse-scale matrix on the swap chain, not a smaller chain: sizing
+    /// the chain in logical units would fit, and would render 1080p video into 1,453
+    /// physical pixels of width on this display and call the result sharp.
+    /// </para>
+    /// </remarks>
+    public void SetCompositionScale(double scaleX, double scaleY)
+    {
+        if (scaleX <= 0 || scaleY <= 0)
+        {
+            return;
+        }
+
+        var packed = ((long)(uint)BitConverter.SingleToInt32Bits((float)scaleX) << 32)
+                     | (uint)BitConverter.SingleToInt32Bits((float)scaleY);
+
+        Interlocked.Exchange(ref _compositionScale, packed);
+
+        // Re-applied by the render thread. Nothing here touches the swap chain, which
+        // belongs to that thread like everything else in the pipeline.
+        Interlocked.Exchange(ref _scaleDirty, 1);
+    }
+
+    /// <summary>Applies the inverse composition scale, so the chain fills the panel.</summary>
+    private void ApplyCompositionScale(IDXGISwapChain1 swapChain)
+    {
+        if (Interlocked.Exchange(ref _scaleDirty, 0) == 0)
+        {
+            return;
+        }
+
+        var packed = Interlocked.Read(ref _compositionScale);
+        var scaleX = BitConverter.Int32BitsToSingle((int)(packed >> 32));
+        var scaleY = BitConverter.Int32BitsToSingle((int)(packed & 0xFFFFFFFF));
+
+        if (scaleX <= 0 || scaleY <= 0)
+        {
+            return;
+        }
+
+        try
+        {
+            using var chain2 = swapChain.QueryInterface<IDXGISwapChain2>();
+            chain2.MatrixTransform = new System.Numerics.Matrix3x2(
+                1.0f / scaleX, 0,
+                0, 1.0f / scaleY,
+                0, 0);
+
+            CompositionScaleApplied = scaleX;
+        }
+        catch (Exception exception)
+        {
+            // A driver without IDXGISwapChain2 gives a cropped picture rather than none,
+            // so this is recorded and not thrown. Losing playback over a scaling detail
+            // would be the worse trade.
+            ScaleFailed = exception;
+        }
+    }
+
     private void Present(
         MpvOpenGlRenderer renderer,
         SharedVideoTarget target,
@@ -209,6 +284,7 @@ public sealed class VideoPresenter : IDisposable
             Interlocked.Increment(ref _loopIterations);
 
             ApplyPendingResize(target, swapChain);
+            ApplyCompositionScale(swapChain);
 
             if (!renderer.HasFrameReady())
             {
