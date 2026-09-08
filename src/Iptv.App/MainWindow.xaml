@@ -48,6 +48,13 @@
                     <Button x:Name="SeriesTab" Content="Series" Click="OnModeClicked" Tag="Series" />
                 </StackPanel>
 
+                <!-- The provider groups its own catalogue, and with 118,763 entries that
+                     grouping is the only thing that makes the library browsable. -->
+                <ComboBox x:Name="CategoryBox"
+                          HorizontalAlignment="Stretch"
+                          PlaceholderText="All categories"
+                          SelectionChanged="OnCategoryChanged" />
+
                 <TextBox x:Name="SearchBox"
                          PlaceholderText="Search"
                          TextChanged="OnSearchChanged" />

@@ -5,6 +5,7 @@ using Iptv.Mpv;
 using Iptv.Mpv.Native;
 using Iptv.Core.Sources;
 using Iptv.Core.Xtream;
+using Microsoft.Data.Sqlite;
 
 namespace Iptv.Harness;
 
@@ -34,6 +35,7 @@ internal static class Program
                 "browse" => await BrowseAsync(CancellationToken.None).ConfigureAwait(false),
                 "failover" => await FailoverSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 "drill" => await FailoverDrill.RunAsync(CancellationToken.None).ConfigureAwait(false),
+                "categories" => await CategoriesAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -60,6 +62,7 @@ internal static class Program
         Console.WriteLine("  browse          Time the VOD and series catalogue queries; no network");
         Console.WriteLine("  failover        Survey what the failover safety guard refuses; no network");
         Console.WriteLine("  drill           Drive a real failover against a dead URL; no provider");
+        Console.WriteLine("  categories      Refresh provider category names only; two small requests");
         return 1;
     }
 
@@ -89,6 +92,17 @@ internal static class Program
         await TimeAsync("search films", async () =>
              $"{(await LibraryRepository.GetFilmsAsync(connection, new CatalogueQuery { Search = "matrix", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
 
+        await DumpPlanAsync(connection, cancellationToken).ConfigureAwait(false);
+
+        await TimeAsync("list live categories", async () =>
+             $"{(await CategoryRepository.GetCategoriesAsync(connection, CategoryKind.Live, cancellationToken)).Count} categories").ConfigureAwait(false);
+
+        await TimeAsync("channels in a category", async () =>
+             $"{(await ChannelRepository.GetChannelsAsync(connection, new ChannelQuery { Category = "AF | AFRICA", Limit = 500 }, DateTimeOffset.UtcNow, cancellationToken)).Count} rows").ConfigureAwait(false);
+
+        await TimeAsync("films in a category", async () =>
+             $"{(await LibraryRepository.GetFilmsAsync(connection, new CatalogueQuery { Category = "VOD | ALBANIA", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
         await TimeAsync("first page of series", async () =>
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
 
@@ -96,6 +110,25 @@ internal static class Program
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Search = "the", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
 
         return 0;
+    }
+
+    /// <summary>Prints the category query plan.</summary>
+    /// <remarks>
+    /// Kept rather than deleted after it earned its place: the category listing took 806ms
+    /// because the planner was quietly using the wrong index, and no timing alone said so.
+    /// It explains the shipping SQL rather than a copy, so the two cannot drift.
+    /// </remarks>
+    private static async Task DumpPlanAsync(SqliteConnection connection, CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+        command.CommandText = "EXPLAIN QUERY PLAN " + CategoryRepository.CategoryCountSql;
+        command.Parameters.AddWithValue("@kind", "live");
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        Console.WriteLine("  -- plan --");
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            Console.WriteLine("     " + reader.GetString(3));
+        }
     }
 
     private static async Task TimeAsync(string label, Func<Task<string>> work)
@@ -693,6 +726,100 @@ internal static class Program
         return 0;
     }
 
+    /// <summary>Refreshes only the category names.</summary>
+    /// <remarks>
+    /// Two small requests, against a full sync's 118,763 streams. Category names change
+    /// far more slowly than the catalogue does, and refetching a quarter of a million rows
+    /// to learn that "Sports" is still called Sports is not a reasonable trade.
+    /// </remarks>
+    private static async Task<int> CategoriesAsync(CancellationToken cancellationToken)
+    {
+        if (LoadCredentials() is not { } credentials)
+        {
+            Console.Error.WriteLine(
+                "No .local/provider.env found. Expected XTREAM_HOST, XTREAM_USER, XTREAM_PASS.");
+            return 1;
+        }
+
+        using var handler = new SocketsHttpHandler { PooledConnectionLifetime = TimeSpan.FromMinutes(5) };
+        using var http = new HttpClient(handler) { Timeout = TimeSpan.FromMinutes(5) };
+        http.DefaultRequestHeaders.UserAgent.ParseAdd("IptvPlayer/0.1");
+
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer", "harness.db");
+
+        await using var connection = await new SqliteConnectionFactory(databasePath)
+            .OpenAsync(cancellationToken).ConfigureAwait(false);
+        await Migrator.MigrateAsync(connection, cancellationToken).ConfigureAwait(false);
+
+        var providerId = await EnsureProviderAsync(connection, credentials, cancellationToken)
+            .ConfigureAwait(false);
+
+        Console.WriteLine("== categories ==");
+        var stopwatch = Stopwatch.StartNew();
+        await SyncCategoriesAsync(
+            connection, new XtreamClient(http, credentials), providerId, cancellationToken)
+            .ConfigureAwait(false);
+        stopwatch.Stop();
+
+        Console.WriteLine();
+        foreach (var kind in new[] { CategoryKind.Live, CategoryKind.Vod })
+        {
+            var listed = await CategoryRepository
+                .GetCategoriesAsync(connection, kind, cancellationToken).ConfigureAwait(false);
+
+            // Non-empty is the number that matters. A provider ships categories holding
+            // nothing, and those are not offered to the user.
+            Console.WriteLine($"  {kind,-5} {listed.Count:N0} non-empty categories");
+            foreach (var category in listed.Take(8))
+            {
+                Console.WriteLine($"    {category.Name,-40} {category.Count,7:N0}");
+            }
+        }
+
+        Console.WriteLine();
+        Console.WriteLine($"  done in {stopwatch.ElapsedMilliseconds:N0}ms");
+        return 0;
+    }
+
+    /// <summary>Stores the provider's category names for live and VOD.</summary>
+    /// <remarks>
+    /// Series categories are fetched by the client but not stored: the <c>series</c> table
+    /// has no <c>category_id</c> to join them to, so keeping them would build a menu that
+    /// leads to empty screens.
+    /// </remarks>
+    private static async Task SyncCategoriesAsync(
+        SqliteConnection connection,
+        XtreamClient client,
+        int providerId,
+        CancellationToken cancellationToken)
+    {
+        var live = await CollectAsync(client.GetLiveCategoriesAsync(cancellationToken)).ConfigureAwait(false);
+        var written = await CategoryRepository
+            .ReplaceAsync(connection, providerId, CategoryKind.Live, live, cancellationToken)
+            .ConfigureAwait(false);
+        Console.WriteLine($"  live  {written:N0} categories");
+
+        var vod = await CollectAsync(client.GetVodCategoriesAsync(cancellationToken)).ConfigureAwait(false);
+        written = await CategoryRepository
+            .ReplaceAsync(connection, providerId, CategoryKind.Vod, vod, cancellationToken)
+            .ConfigureAwait(false);
+        Console.WriteLine($"  vod   {written:N0} categories");
+
+        static async Task<List<(string CategoryId, string Name, int ParentId)>> CollectAsync(
+            IAsyncEnumerable<XtreamCategory> source)
+        {
+            var results = new List<(string, string, int)>();
+            await foreach (var category in source.ConfigureAwait(false))
+            {
+                results.Add((category.CategoryId ?? string.Empty, category.CategoryName ?? string.Empty, category.ParentId));
+            }
+
+            return results;
+        }
+    }
+
     private static async Task<int> SyncAsync(CancellationToken cancellationToken)
     {
         if (LoadCredentials() is not { } credentials)
@@ -742,6 +869,13 @@ internal static class Program
         await SqliteFeatures.EnsureFts5AvailableAsync(connection, cancellationToken).ConfigureAwait(false);
         var providerId = await EnsureProviderAsync(connection, credentials, cancellationToken)
             .ConfigureAwait(false);
+
+        // Categories first, and cheap: a few hundred rows against the streams' hundreds of
+        // thousands. Without them the streams carry category ids that name nothing, and a
+        // library of 118,763 entries can only be searched, never browsed.
+        Console.WriteLine();
+        Console.WriteLine("== categories ==");
+        await SyncCategoriesAsync(connection, client, providerId, cancellationToken).ConfigureAwait(false);
 
         Console.WriteLine();
         Console.WriteLine("== fetch ==");
