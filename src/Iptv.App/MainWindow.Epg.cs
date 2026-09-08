@@ -1,8 +1,11 @@
 using System;
 using System.Collections.Generic;
 using System.Threading;
+using System.IO;
 using System.Threading.Tasks;
 using Iptv.Core.Data;
+using Iptv.Core.Epg;
+using Iptv.Core.Sources;
 using Iptv.Presentation;
 using Microsoft.UI;
 using Microsoft.UI.Xaml;
@@ -309,6 +312,57 @@ public sealed partial class MainWindow
         }
 
         return _epgHourPool[index];
+    }
+
+    /// <summary>
+    /// Refreshes the guide on startup if it is running out.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Not awaited by startup. The download is 64MB and the ingest moves 164,661 rows;
+    /// blocking the window on it would mean the app takes a minute to appear, on a task
+    /// the user did not ask for.
+    /// </para>
+    /// <para>
+    /// The policy decides whether to fetch at all, and throttles attempts to one every
+    /// four hours, so this being called on every launch does not mean a download on every
+    /// launch.
+    /// </para>
+    /// </remarks>
+    private async Task RefreshGuideInBackgroundAsync()
+    {
+        try
+        {
+            await using var connection = await OpenAsync();
+
+            var report = await EpgRefreshService.RefreshIfDueAsync(
+                connection,
+                async (url, token) =>
+                {
+                    // Buffered rather than streamed. The ingest reads the document twice
+                    // and a network stream cannot be rewound; 64MB in memory for the
+                    // duration is the cheaper problem.
+                    var payload = await Http.GetByteArrayAsync(url, token);
+                    return new MemoryStream(payload);
+                },
+                new DpapiSecretProtector(),
+                DateTimeOffset.UtcNow,
+                CancellationToken.None);
+
+            Log($"guide refresh: {report.Summary}");
+
+            if (report.Refreshed)
+            {
+                // The channel list carries now/next, so it is stale the moment the guide
+                // changes underneath it.
+                await ApplyAsync(await _browser.LoadAsync(CancellationToken.None));
+            }
+        }
+        catch (Exception exception)
+        {
+            // Never fatal: a stale guide is far better than an app that will not start.
+            Log($"guide refresh failed: {exception}");
+        }
     }
 
     private async void OnEpgNowClicked(object sender, RoutedEventArgs e)

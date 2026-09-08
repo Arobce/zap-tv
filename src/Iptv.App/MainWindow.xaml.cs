@@ -251,6 +251,11 @@ public sealed partial class MainWindow : Window
             UpdateModeButtons();
             await LoadCategoriesAsync();
             await ApplyAsync(await _browser.LoadAsync(CancellationToken.None));
+
+            // Deliberately not awaited. The guide download is 64MB and the ingest moves
+            // 164,661 rows; blocking the window on a task the user did not ask for would
+            // mean the app takes a minute to appear.
+            _ = RefreshGuideInBackgroundAsync();
         }
         catch (Exception exception)
         {
