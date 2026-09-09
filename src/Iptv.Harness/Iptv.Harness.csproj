@@ -13,6 +13,13 @@
   <ItemGroup>
     <ProjectReference Include="..\Iptv.Core\Iptv.Core.csproj" />
     <ProjectReference Include="..\Iptv.Mpv\Iptv.Mpv.csproj" />
+
+    <!--
+      For the diagnostics command, which prints the view model's own output rather than a
+      second copy of it. A headless check that computed its own numbers could agree with
+      itself while disagreeing with the panel.
+    -->
+    <ProjectReference Include="..\Iptv.Presentation\Iptv.Presentation.csproj" />
   </ItemGroup>
 
 </Project>

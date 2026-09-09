@@ -679,8 +679,15 @@ Write every attempt to `stream_health`, subject to the Phase 1 retention policy.
 - A fixture with two same-named channels from different countries produces no failover between them.
 - Diagnostics view shows accurate per-provider stats after a synthetic run.
 
-Status: the second is covered by unit tests. The third has the data behind it
-(`StreamHealthRepository.GetProviderHealthAsync`) but no view yet; that belongs to Phase 9.
+Status: the second is covered by unit tests. The third is met — the diagnostics panel shows
+per-provider channel counts, success rate and average time to first frame, and
+`dotnet run --project src/Iptv.Harness -- diagnostics` prints the same view model headlessly
+so the numbers can be checked without reading them off a screenshot. Against the reference
+library it reports `71% of 94 attempts · 1027ms to first frame`.
+
+That output also corroborated the stall bug from the other direction: 14 recorded stalls
+averaging **19,831ms**, which is the frame-based detector waiting out mpv's buffer, measured
+from real use rather than from a drill.
 
 The first is now measured against a real mid-stream cut by
 `dotnet run --project src/Iptv.Harness -- killswitch`, which plays a real channel through a

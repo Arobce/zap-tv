@@ -1294,8 +1294,42 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        var row = _rows[_playingIndex];
-        if (row.Kind != LibraryKind.Live)
+        await ToggleFavouriteAsync(_rows[_playingIndex], star: null);
+    }
+
+    /// <summary>The star on a row.</summary>
+    /// <remarks>
+    /// The row is found by key rather than by index. The list virtualises, so the button
+    /// that raised this belongs to whichever row is bound to that container right now, and
+    /// an index captured when the template was instantiated would have moved on.
+    /// </remarks>
+    private async void OnFavouriteClicked(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: string key } button)
+        {
+            return;
+        }
+
+        try
+        {
+            if (_rows.Find(r => r.Key == key) is { } row)
+            {
+                await ToggleFavouriteAsync(row, button);
+            }
+        }
+        catch (Exception exception)
+        {
+            // async void: nothing above this catches, so an exception here would vanish
+            // and the star would simply not respond.
+            Log($"favouriting {key} failed: {exception}");
+            Toast("Could not save that favourite");
+        }
+    }
+
+    /// <summary>Flips one row's favourite state and redraws its star.</summary>
+    private async Task ToggleFavouriteAsync(LibraryRow row, Button? star)
+    {
+        if (!row.CanFavourite)
         {
             // Favourites are a live-TV idea: they sort a 20,479-row list. Films and
             // episodes have continue-watching instead.
@@ -1304,8 +1338,22 @@ public sealed partial class MainWindow : Window
         }
 
         await using var connection = await OpenAsync();
+
+        // Toggled against the stored value, not against the row's. Two rows can carry the
+        // same channel — a search hit and the catalogue entry behind it — and the database
+        // is the only thing that knows which way it is now.
         var favourite = await ChannelRepository.ToggleFavouriteAsync(
             connection, row.Key, CancellationToken.None);
+
+        row.IsFavourite = favourite;
+
+        // Set directly as well as on the model. The binding is one-way and evaluated when
+        // the container is bound, so without this the star only catches up when the row
+        // scrolls out of view and back.
+        if (star is not null)
+        {
+            star.Content = row.FavouriteGlyph;
+        }
 
         Toast(favourite ? $"★  {row.Title}" : $"Removed  {row.Title}");
         Log($"favourite {(favourite ? "set" : "cleared")} for {row.Key}");

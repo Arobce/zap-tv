@@ -182,6 +182,16 @@
                     </ItemsRepeater.Layout>
                     <ItemsRepeater.ItemTemplate>
                         <DataTemplate x:DataType="vm:LibraryRow">
+                            <!-- The star is a sibling of the row button, not a child of it.
+                                 Nested buttons in WinUI give the inner one the click and
+                                 the outer one the keyboard, which reads as a star that
+                                 sometimes changes channel. -->
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="Auto" />
+                                </Grid.ColumnDefinitions>
+
                             <Button HorizontalAlignment="Stretch"
                                     HorizontalContentAlignment="Left"
                                     Background="Transparent"
@@ -207,6 +217,20 @@
                                                  Visibility="{x:Bind local:Bindings.Show(ShowProgress)}" />
                                 </StackPanel>
                             </Button>
+
+                                <Button Grid.Column="1"
+                                        Content="{x:Bind FavouriteGlyph}"
+                                        Tag="{x:Bind Key}"
+                                        Click="OnFavouriteClicked"
+                                        Background="Transparent"
+                                        BorderThickness="0"
+                                        FontSize="17"
+                                        Padding="9,6"
+                                        VerticalAlignment="Center"
+                                        Foreground="{StaticResource ZapAccent}"
+                                        ToolTipService.ToolTip="Favourite"
+                                        Visibility="{x:Bind local:Bindings.Show(CanFavourite)}" />
+                            </Grid>
                         </DataTemplate>
                     </ItemsRepeater.ItemTemplate>
                 </ItemsRepeater>
