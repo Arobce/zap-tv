@@ -22,6 +22,15 @@
     <PackageVersion Include="Microsoft.Windows.SDK.BuildTools" Version="10.0.26100.7175" />
   </ItemGroup>
 
+  <ItemGroup Label="Packaging">
+    <!--
+      Velopack, per Phase 10. The matching `vpk` command-line tool is pinned to the same
+      version in scripts/publish.ps1: the two halves write and read the same package
+      format, and a mismatch produces a release the installed app cannot apply.
+    -->
+    <PackageVersion Include="Velopack" Version="1.2.0" />
+  </ItemGroup>
+
   <ItemGroup Label="Graphics">
     <!-- D3D11 and DXGI bindings for the WGL_NV_DX_interop2 presentation path (decision 0002). -->
     <PackageVersion Include="Vortice.Direct3D11" Version="3.8.3" />
