@@ -41,6 +41,7 @@ internal static class Program
                 "episodes" => await EpisodeProbe.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "guide" => await GuideSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 "search" => await SearchProbe.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "artwork" => await ArtworkSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -72,6 +73,8 @@ internal static class Program
         Console.WriteLine("  rebuild         Recompute channel names from live streams; no network");
         Console.WriteLine("  episodes [x]    Fetch one series episodes end to end, without the UI");
         Console.WriteLine("  guide           Report the shape of the stored guide; no network");
+        Console.WriteLine("  search [term]   Time the unified search across the catalogue; no network");
+        Console.WriteLine("  artwork         Report how much of the catalogue has covers; no network");
         return 1;
     }
 

@@ -379,6 +379,8 @@ public sealed partial class MainWindow : Window
         _rows.AddRange(result.Rows);
         _playingIndex = -1;
 
+        SetPosterMode(result.UsePosters);
+
         // Reassigning rather than mutating: ItemsRepeater does not observe a plain List,
         // and the slice does not yet need incremental loading.
         ChannelList.ItemsSource = null;
@@ -1377,7 +1379,9 @@ public sealed partial class MainWindow : Window
             ? AppWindowPresenterKind.FullScreen
             : AppWindowPresenterKind.Overlapped);
 
-        SidebarColumn.Width = on ? new GridLength(0) : new GridLength(380);
+        // Restored to whatever the current view wants, not to the list width: coming out
+        // of fullscreen on the film grid must not hand it back a sidebar sized for rows.
+        SidebarColumn.Width = on ? new GridLength(0) : new GridLength(SidebarWidth);
         Sidebar.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
         TitleOverlay.Visibility = on ? Visibility.Collapsed : Visibility.Visible;
 
