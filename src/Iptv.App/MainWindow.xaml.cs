@@ -218,6 +218,8 @@ public sealed partial class MainWindow : Window
         _toastTimer.IsRepeating = false;
         _toastTimer.Tick += (_, _) => ToastPanel.Visibility = Visibility.Collapsed;
 
+        StartTransport();
+
         // Key presses need somewhere to land before anything has been clicked.
         RootGrid.Loaded += (_, _) => RootGrid.Focus(FocusState.Programmatic);
 
@@ -1099,7 +1101,9 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private async void OnKeyDown(object sender, KeyRoutedEventArgs e)
     {
-        if (FocusManager.GetFocusedElement(RootGrid.XamlRoot) is TextBox)
+        // Sliders alongside text boxes: a focused slider takes the arrow keys for itself,
+        // and letting both act would move the thumb and change channel on one press.
+        if (FocusManager.GetFocusedElement(RootGrid.XamlRoot) is TextBox or Slider)
         {
             // Escape still gets out, because a search box you cannot leave without the
             // mouse is worse than no shortcut at all.
@@ -1121,7 +1125,14 @@ public sealed partial class MainWindow : Window
             case VirtualKey.Escape:
                 // Fullscreen first. Escape means "back out of the innermost thing", and
                 // leaving the series list while still fullscreen would be the wrong one.
-                if (_fullScreen)
+                if (_numbers.IsActive)
+                {
+                    // A half-typed number is more inner than anything else on screen.
+                    _numberTimer?.Stop();
+                    _numbers.Reset();
+                    NumberEntryPanel.Visibility = Visibility.Collapsed;
+                }
+                else if (_fullScreen)
                 {
                     SetFullScreen(false);
                 }
@@ -1146,12 +1157,32 @@ public sealed partial class MainWindow : Window
 
                 break;
 
+            // Space and K both pause. K is mpv's own binding and the one anyone who has
+            // used a player expects; space is the one everyone else does.
             case VirtualKey.Space:
+            case VirtualKey.K:
+            case (VirtualKey)0xB3:
                 TogglePause();
                 break;
 
             case VirtualKey.M:
+            case (VirtualKey)0xAD:
                 ToggleMute();
+                break;
+
+            // Slash focuses the search box, as it does in a browser. Oem2 rather than a
+            // named key: there is no VirtualKey.Slash, and the code is layout dependent.
+            case (VirtualKey)0xBF:
+                SearchBox.Focus(FocusState.Programmatic);
+                SearchBox.SelectAll();
+                break;
+
+            case VirtualKey.I:
+                // The overlay covers the top of the picture. Hiding it is what a viewer
+                // wants for most of the time they are watching.
+                TitleOverlay.Visibility = TitleOverlay.Visibility == Visibility.Visible
+                    ? Visibility.Collapsed
+                    : Visibility.Visible;
                 break;
 
             // B for bookmark. F is fullscreen and S is free but reads as "stop"; B is what
@@ -1168,15 +1199,41 @@ public sealed partial class MainWindow : Window
                 AdjustVolume(+5);
                 break;
 
+            // J and L are mpv's seek keys. Ten seconds back and thirty forward is not
+            // symmetry for its own sake: back is for catching a line of dialogue, forward
+            // is for skipping something, and those are different sizes of mistake.
+            case VirtualKey.J:
+                SeekRelative(-10);
+                break;
+
+            case VirtualKey.L:
+                SeekRelative(+30);
+                break;
+
             case VirtualKey.Up:
+            case VirtualKey.PageUp:
+            case (VirtualKey)0xB1:
                 await StepChannelAsync(-1);
                 break;
 
             case VirtualKey.Down:
+            case VirtualKey.PageDown:
+            case (VirtualKey)0xB0:
                 await StepChannelAsync(+1);
                 break;
 
+            case VirtualKey.Enter:
+                // Ends a part-typed number early rather than waiting out the timeout.
+                await CommitNumberAsync(_numbers.Commit());
+                break;
+
             default:
+                if (DigitOf(e.Key) is { } digit)
+                {
+                    await PressDigitAsync(digit);
+                    break;
+                }
+
                 return;
         }
 

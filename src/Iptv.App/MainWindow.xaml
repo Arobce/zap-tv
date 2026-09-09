@@ -134,7 +134,7 @@
                 ItemsRepeater in a ScrollViewer, per the PRD: a plain ListView does not
                 hold up at 20,000 rows.
             -->
-            <ScrollViewer Grid.Row="1" Padding="8,0,8,0">
+            <ScrollViewer x:Name="ChannelScroll" Grid.Row="1" Padding="8,0,8,0">
                 <ItemsRepeater x:Name="ChannelList">
                     <ItemsRepeater.ItemTemplate>
                         <DataTemplate x:DataType="vm:LibraryRow">
@@ -192,9 +192,10 @@
                     <TextBlock x:Name="ProgrammeTitle"
                                FontSize="13"
                                Foreground="{StaticResource ZapTextDim}" />
-                    <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · M mute · B favourite"
+                    <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · J L seek · M mute · B favourite · digits jump · I hides this"
                                FontSize="11"
                                Margin="0,4,0,0"
+                               TextWrapping="Wrap"
                                Foreground="{StaticResource ZapTextFaint}" />
                 </StackPanel>
             </Border>
@@ -211,6 +212,66 @@
                            FontSize="24"
                            FontWeight="SemiBold"
                            Foreground="White" />
+            </Border>
+
+            <!-- Digits typed in a row, shown while the entry waits for the next one. Not
+                 the toast: that hides after 1.2s and the entry waits 1.5s, so it would
+                 disappear just before the jump it is describing. -->
+            <Border x:Name="NumberEntryPanel"
+                    VerticalAlignment="Top"
+                    HorizontalAlignment="Right"
+                    Background="{StaticResource ZapOverlay}"
+                    CornerRadius="8"
+                    Padding="24,14"
+                    Margin="16"
+                    Visibility="Collapsed">
+                <TextBlock x:Name="NumberEntryText"
+                           FontSize="34"
+                           FontWeight="Bold"
+                           Foreground="{StaticResource ZapAccent}" />
+            </Border>
+
+            <!-- Films and episodes only. Live has no end to scrub towards. -->
+            <Border x:Name="TransportBar"
+                    VerticalAlignment="Bottom"
+                    Background="{StaticResource ZapOverlay}"
+                    CornerRadius="8"
+                    Padding="16,10"
+                    Margin="16,0,16,58"
+                    Visibility="Collapsed">
+                <Grid ColumnSpacing="12">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock x:Name="PositionText"
+                               Text="0:00"
+                               VerticalAlignment="Center"
+                               FontFamily="Consolas"
+                               FontSize="13"
+                               Foreground="{StaticResource ZapText}" />
+
+                    <Slider x:Name="SeekSlider"
+                            Grid.Column="1"
+                            Minimum="0"
+                            Maximum="1000"
+                            StepFrequency="1"
+                            VerticalAlignment="Center"
+                            ManipulationMode="None"
+                            IsThumbToolTipEnabled="False"
+                            PointerCaptureLost="OnSeekCommitted"
+                            KeyUp="OnSeekKeyUp" />
+
+                    <TextBlock x:Name="DurationText"
+                               Grid.Column="2"
+                               Text="--:--"
+                               VerticalAlignment="Center"
+                               FontFamily="Consolas"
+                               FontSize="13"
+                               Foreground="{StaticResource ZapTextDim}" />
+                </Grid>
             </Border>
 
             <Border VerticalAlignment="Bottom"
