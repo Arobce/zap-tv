@@ -118,8 +118,10 @@
                           PlaceholderText="All categories"
                           SelectionChanged="OnCategoryChanged" />
 
+                <!-- Searches everything at once, not the open tab: channels, films, series
+                     and the guide, per the PRD. -->
                 <TextBox x:Name="SearchBox"
-                         PlaceholderText="Search"
+                         PlaceholderText="Search everything"
                          TextChanged="OnSearchChanged" />
             </StackPanel>
 

@@ -90,6 +90,13 @@ public sealed class LibraryBrowser
     /// <summary>How many rows a catalogue page holds.</summary>
     public const int PageSize = 500;
 
+    /// <summary>How many of each kind a search returns.</summary>
+    /// <remarks>
+    /// Per kind rather than overall: a term matching ten thousand films must still leave
+    /// room for the one channel that matches it.
+    /// </remarks>
+    public const int SearchPerKind = 25;
+
     public LibraryView View { get; private set; } = LibraryView.Live;
 
     /// <summary>Provider category name to restrict to, or null for all.</summary>
@@ -156,6 +163,14 @@ public sealed class LibraryBrowser
         Level = BrowseLevel.Catalogue;
 
         await using var connection = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        // A search leaves the tab behind. The PRD asks for one search across channels,
+        // films, series and the guide, and a term that only worked on whichever tab
+        // happened to be open would be the thing it is meant to replace.
+        if (Search is not null)
+        {
+            return await LoadSearchAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
 
         return View switch
         {
@@ -253,6 +268,41 @@ public sealed class LibraryBrowser
                 : $"{rows.Count:N0} episodes · {back}",
         };
     }
+
+    /// <summary>Searches everything at once.</summary>
+    private async Task<BrowseResult> LoadSearchAsync(
+        Microsoft.Data.Sqlite.SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        var hits = await SearchRepository.SearchAsync(
+            connection, Search, SearchPerKind, DateTimeOffset.UtcNow, cancellationToken)
+            .ConfigureAwait(false);
+
+        var rows = hits.Select(LibraryRow.FromSearchHit).ToList();
+
+        // Counted by kind, because the value of a unified search is knowing there is one
+        // channel among nine hundred films rather than being handed nine hundred and one
+        // undifferentiated rows.
+        var counts = hits
+            .GroupBy(h => h.Kind)
+            .OrderBy(g => g.Key)
+            .Select(g => $"{g.Count()} {Describe(g.Key, g.Count())}")
+            .ToList();
+
+        return Catalogue(
+            rows,
+            count => count == 0
+                ? "nothing found · Esc or clear the box to go back"
+                : string.Join(" · ", counts));
+    }
+
+    private static string Describe(SearchHitKind kind, int count) => kind switch
+    {
+        SearchHitKind.Channel => count == 1 ? "channel" : "channels",
+        SearchHitKind.Film => count == 1 ? "film" : "films",
+        SearchHitKind.Series => "series",
+        _ => count == 1 ? "programme" : "programmes",
+    };
 
     private async Task<BrowseResult> LoadLiveAsync(
         Microsoft.Data.Sqlite.SqliteConnection connection,
