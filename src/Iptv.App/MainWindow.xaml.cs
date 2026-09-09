@@ -109,7 +109,7 @@ public sealed partial class MainWindow : Window
     /// while surfing and long enough that holding a key down cannot open dozens of
     /// streams, which is what gets an account blocked.
     /// </remarks>
-    private readonly ProviderConnectionLimiter _connections =
+    private ProviderConnectionLimiter _connections =
         new(maxConnections: 1, minimumInterval: TimeSpan.FromSeconds(2));
 
     private ConnectionLease? _currentStream;
@@ -248,6 +248,7 @@ public sealed partial class MainWindow : Window
                 return;
             }
 
+            await LoadSettingsAsync();
             UpdateModeButtons();
             await LoadCategoriesAsync();
             await ApplyAsync(await _browser.LoadAsync(CancellationToken.None));
