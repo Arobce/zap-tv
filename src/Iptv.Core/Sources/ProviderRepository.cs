@@ -92,6 +92,39 @@ public static class ProviderRepository
         return results;
     }
 
+    /// <summary>
+    /// The most concurrent streams it is safe to open, across the enabled providers.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The smallest limit, not the largest. Failover can open either provider's copy of a
+    /// channel, so a limiter set to the more generous account's four would exceed the other
+    /// account's one — and exceeding it is what gets an account blocked.
+    /// </para>
+    /// <para>
+    /// One is the answer when nothing is known. A panel that reports zero, or has never
+    /// been asked, must not be read as unlimited.
+    /// </para>
+    /// </remarks>
+    public static async Task<int> GetSafeConnectionLimitAsync(
+        SqliteConnection connection,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText =
+            """
+            SELECT min(max_connections)
+            FROM providers
+            WHERE enabled = 1 AND max_connections IS NOT NULL AND max_connections > 0;
+            """;
+
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+
+        return value is null or DBNull ? 1 : Math.Max(1, Convert.ToInt32(value));
+    }
+
     /// <summary>Adds a provider, or updates the one already on that host and username.</summary>
     /// <returns>The provider's id.</returns>
     /// <remarks>

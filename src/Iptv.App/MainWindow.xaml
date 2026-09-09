@@ -83,6 +83,10 @@
                             Padding="10,4"
                             FontSize="12"
                             Click="OnOpenProvidersClicked" />
+                    <Button Content="Settings"
+                            Padding="10,4"
+                            FontSize="12"
+                            Click="OnOpenSettingsClicked" />
                     <Button Content="?"
                             Padding="10,4"
                             FontSize="12"
@@ -221,6 +225,76 @@
                            FontSize="12"
                            Foreground="{StaticResource ZapAccentDim}" />
             </Border>
+        </Grid>
+
+        <Grid x:Name="SettingsPanel"
+              Grid.ColumnSpan="2"
+              Background="{StaticResource ZapBackground}"
+              Visibility="Collapsed">
+            <ScrollViewer Padding="40,32">
+                <StackPanel MaxWidth="680" HorizontalAlignment="Left" Spacing="20">
+                    <TextBlock Text="Settings" FontSize="26" FontWeight="Bold"
+                               Foreground="{StaticResource ZapText}" />
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Volume" FontSize="13"
+                                   Foreground="{StaticResource ZapTextDim}" />
+                        <Slider x:Name="VolumeSlider" Minimum="0" Maximum="130" StepFrequency="1"
+                                Width="360" HorizontalAlignment="Left" />
+                        <TextBlock Text="Above 100 is mpv's soft gain, for quiet channels."
+                                   FontSize="11" Foreground="{StaticResource ZapTextFaint}" />
+                    </StackPanel>
+
+                    <ToggleSwitch x:Name="HardwareDecodeToggle" Header="Hardware decoding"
+                                  OnContent="On" OffContent="Off" />
+                    <TextBlock Text="Applies to the next channel, not the one playing. Turn it off only to diagnose a driver problem."
+                               FontSize="11" TextWrapping="Wrap"
+                               Foreground="{StaticResource ZapTextFaint}" />
+
+                    <ToggleSwitch x:Name="DeinterlaceToggle" Header="Deinterlace"
+                                  OnContent="Auto" OffContent="Off" />
+
+                    <ToggleSwitch x:Name="AutoRefreshToggle" Header="Refresh the guide automatically"
+                                  OnContent="On" OffContent="Off" />
+                    <TextBlock Text="This provider publishes about 24 hours ahead, so a guide left unrefreshed is empty within a day."
+                               FontSize="11" TextWrapping="Wrap"
+                               Foreground="{StaticResource ZapTextFaint}" />
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Buffer ahead (seconds)" FontSize="13"
+                                   Foreground="{StaticResource ZapTextDim}" />
+                        <Slider x:Name="ReadaheadSlider" Minimum="0" Maximum="30" StepFrequency="1"
+                                Width="360" HorizontalAlignment="Left" />
+                        <TextBlock Text="Higher survives a stuttering provider; lower changes channel sooner. Two is what the latency measurements were taken against."
+                                   FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ZapTextFaint}" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="6">
+                        <TextBlock Text="Minimum gap between channel changes (seconds)" FontSize="13"
+                                   Foreground="{StaticResource ZapTextDim}" />
+                        <Slider x:Name="IntervalSlider" Minimum="0" Maximum="10" StepFrequency="1"
+                                Width="360" HorizontalAlignment="Left" />
+
+                        <!-- The reason is written here rather than assumed, because the
+                             obvious thing to do with this setting is to set it to zero. -->
+                        <TextBlock Text="This exists because a benchmark opened 30 streams in quick succession and the provider blocked the account for hours. Lower it at your own risk."
+                                   FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ZapTextFaint}" />
+                        <TextBlock x:Name="ConnectionLimitText" FontSize="11" TextWrapping="Wrap"
+                                   Foreground="{StaticResource ZapTextDim}" />
+                    </StackPanel>
+
+                    <StackPanel Orientation="Horizontal" Spacing="8">
+                        <Button Content="Save" Click="OnSaveSettingsClicked" Padding="16,7" />
+                        <Button Content="Reset to defaults" Click="OnResetSettingsClicked" Padding="16,7" />
+                        <Button Content="Close" Click="OnCloseSettingsClicked" Padding="16,7" />
+                    </StackPanel>
+
+                    <TextBlock x:Name="SettingsResultText" FontSize="13"
+                               Foreground="{StaticResource ZapAccent}" />
+                </StackPanel>
+            </ScrollViewer>
         </Grid>
 
         <!--
