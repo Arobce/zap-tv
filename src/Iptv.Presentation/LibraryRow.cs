@@ -79,6 +79,48 @@ public sealed class LibraryRow
     /// <summary>Whether there is a measured position worth drawing a bar for.</summary>
     public bool ShowProgress { get; private init; }
 
+    /// <summary>Artwork, already checked. Null when the provider gave nothing usable.</summary>
+    public string? ImageUrl { get; private init; }
+
+    /// <summary>Whether there is artwork to draw instead of a lettered placeholder.</summary>
+    public bool HasImage => ImageUrl is not null;
+
+    /// <summary>The first letter of the title, for a poster with no artwork.</summary>
+    /// <remarks>
+    /// A letter rather than a generic film icon. In a grid where a third of the tiles have
+    /// no cover, identical icons make the gaps look like one repeated item; initials keep
+    /// each tile distinguishable at a glance.
+    /// </remarks>
+    public string Initial => Title.Length > 0
+        ? Title[..1].ToUpperInvariant()
+        : "?";
+
+    /// <summary>
+    /// Accepts an artwork URL, or rejects it.
+    /// </summary>
+    /// <remarks>
+    /// Checked here rather than at the binding. Providers put all sorts in these fields -
+    /// empty strings, bare filenames, and occasionally a <c>file://</c> path from whatever
+    /// machine built their catalogue - and an Image handed one of those either throws or
+    /// reaches for a local file. Only absolute http and https get through.
+    /// </remarks>
+    private static string? Artwork(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw))
+        {
+            return null;
+        }
+
+        var trimmed = raw.Trim();
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            return null;
+        }
+
+        return uri.Scheme is "http" or "https" ? trimmed : null;
+    }
+
     public static LibraryRow FromChannel(ChannelListItem item)
     {
         ArgumentNullException.ThrowIfNull(item);
@@ -91,6 +133,7 @@ public sealed class LibraryRow
         {
             ProgressPercent = (item.NowProgress ?? 0) * 100,
             ShowProgress = item.NowProgress is not null,
+            ImageUrl = Artwork(item.LogoUrl),
         };
     }
 
@@ -109,7 +152,10 @@ public sealed class LibraryRow
         ArgumentNullException.ThrowIfNull(item);
 
         var subtitle = item.Subtitle is null ? "film" : $"film · {item.Subtitle}";
-        return new LibraryRow(item.Key, item.Title, subtitle, LibraryKind.Film, playable: true);
+        return new LibraryRow(item.Key, item.Title, subtitle, LibraryKind.Film, playable: true)
+        {
+            ImageUrl = Artwork(item.ImageUrl),
+        };
     }
 
     public static LibraryRow FromSeries(CatalogueItem item)
@@ -125,6 +171,7 @@ public sealed class LibraryRow
             playable: false)
         {
             SeriesRowId = item.SeriesRowId,
+            ImageUrl = Artwork(item.ImageUrl),
         };
     }
 

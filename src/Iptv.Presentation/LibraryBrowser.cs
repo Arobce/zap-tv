@@ -55,6 +55,16 @@ public sealed record BrowseResult
     public required string Summary { get; init; }
 
     public required BrowseLevel Level { get; init; }
+
+    /// <summary>
+    /// Whether these rows should be drawn as a poster grid rather than a list.
+    /// </summary>
+    /// <remarks>
+    /// Films and series only, and only when browsing. Everything else is either artwork
+    /// the catalogue does not carry, or content a grid is the wrong shape for: a channel
+    /// list is read by name and now/next, and a grid of 20,000 logos is unreadable.
+    /// </remarks>
+    public bool UsePosters { get; init; }
 }
 
 /// <summary>
@@ -393,13 +403,13 @@ public sealed class LibraryBrowser
         // search for a number nobody reads while typing.
         if (Search is not null)
         {
-            return Catalogue(rows, count => $"{count:N0} films matching");
+            return Catalogue(rows, count => $"{count:N0} films matching", posters: true);
         }
 
         var total = await LibraryRepository.CountFilmsAsync(
             connection, new CatalogueQuery { Category = Category }, cancellationToken).ConfigureAwait(false);
 
-        return Catalogue(rows, count => $"{count:N0} of {total:N0} films");
+        return Catalogue(rows, count => $"{count:N0} of {total:N0} films", posters: true);
     }
 
     private async Task<BrowseResult> LoadSeriesAsync(
@@ -413,7 +423,8 @@ public sealed class LibraryBrowser
 
         return Catalogue(
             series.Select(LibraryRow.FromSeries).ToList(),
-            count => $"{count:N0} series · newest first");
+            count => $"{count:N0} series · newest first",
+            posters: true);
     }
 
     private async Task<BrowseResult> LoadFavouritesAsync(
@@ -457,11 +468,15 @@ public sealed class LibraryBrowser
             count => count > 0 ? $"{count:N0} to finish" : EmptyContinueMessage());
     }
 
-    private BrowseResult Catalogue(IReadOnlyList<LibraryRow> rows, Func<int, string> summary)
+    private BrowseResult Catalogue(
+        IReadOnlyList<LibraryRow> rows,
+        Func<int, string> summary,
+        bool posters = false)
         => new()
         {
             Rows = rows,
             Level = BrowseLevel.Catalogue,
             Summary = summary(rows.Count),
+            UsePosters = posters,
         };
 }

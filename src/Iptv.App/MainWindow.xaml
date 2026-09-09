@@ -52,6 +52,47 @@
             <SolidColorBrush x:Key="ZapTextDim" Color="#FF938D7C" />
             <SolidColorBrush x:Key="ZapTextFaint" Color="#FF6B6659" />
             <SolidColorBrush x:Key="ZapTrack" Color="#FF2E2A21" />
+
+            <!--
+                One tile of the film and series grids. The initial sits behind the image
+                rather than beside it, so a cover that 404s or turns out not to be an
+                image leaves the letter showing through with no failure handler.
+            -->
+            <DataTemplate x:Key="PosterTemplate" x:DataType="vm:LibraryRow">
+                <Button Padding="0"
+                        Margin="5"
+                        Background="Transparent"
+                        BorderThickness="0"
+                        Click="OnRowClicked"
+                        Tag="{x:Bind Key}">
+                    <StackPanel Width="120" Spacing="6">
+                        <!-- Border, not a Grid with a CornerRadius: only a Border clips
+                             its child, and an unclipped UniformToFill image squares off
+                             the corners it was given. -->
+                        <Border Width="120"
+                                Height="180"
+                                CornerRadius="6"
+                                Background="{StaticResource ZapTrack}">
+                            <Grid>
+                                <TextBlock Text="{x:Bind Initial}"
+                                           FontSize="46"
+                                           FontWeight="Bold"
+                                           HorizontalAlignment="Center"
+                                           VerticalAlignment="Center"
+                                           Foreground="{StaticResource ZapTextFaint}" />
+                                <Image Source="{x:Bind local:Bindings.Poster(ImageUrl)}"
+                                       Stretch="UniformToFill" />
+                            </Grid>
+                        </Border>
+                        <TextBlock Text="{x:Bind Title}"
+                                   FontSize="11"
+                                   MaxLines="2"
+                                   TextWrapping="Wrap"
+                                   TextTrimming="CharacterEllipsis"
+                                   Foreground="{StaticResource ZapText}" />
+                    </StackPanel>
+                </Button>
+            </DataTemplate>
         </Grid.Resources>
 
         <Grid.ColumnDefinitions>
@@ -136,6 +177,9 @@
             -->
             <ScrollViewer x:Name="ChannelScroll" Grid.Row="1" Padding="8,0,8,0">
                 <ItemsRepeater x:Name="ChannelList">
+                    <ItemsRepeater.Layout>
+                        <StackLayout x:Name="ListLayout" />
+                    </ItemsRepeater.Layout>
                     <ItemsRepeater.ItemTemplate>
                         <DataTemplate x:DataType="vm:LibraryRow">
                             <Button HorizontalAlignment="Stretch"
