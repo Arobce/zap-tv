@@ -100,7 +100,8 @@ public sealed partial class MainWindow : Window
 
     private long _framesAtLastCheck;
     private long _framesAtOpen;
-    private int _stallSeconds;
+    /// <summary>Decides when the stream has died. See decision 0012.</summary>
+    private readonly StallDetector _stalls = new();
     private readonly DispatcherQueueTimer _firstFrameDeadline;
     private readonly DispatcherQueueTimer _stallWatch;
     private readonly DispatcherQueueTimer _toastTimer;
@@ -156,9 +157,10 @@ public sealed partial class MainWindow : Window
         };
         _heartbeat.Start();
 
-        // The PRD's two failure detectors. Both count presented frames rather than asking
-        // mpv how it is doing, because a stream that stops delivering while the demuxer
-        // keeps reconnecting reports itself as fine.
+        // The PRD's two failure detectors. The first-frame one counts presented frames
+        // rather than asking mpv how it is doing, because a stream that opens and then
+        // delivers nothing reports itself as fine. The stall one needs a second signal as
+        // well - see StallDetector, and decision 0012 for what frames alone measured.
         _firstFrameDeadline = DispatcherQueue.CreateTimer();
         _firstFrameDeadline.Interval = TimeSpan.FromSeconds(4);
         _firstFrameDeadline.IsRepeating = false;
@@ -172,8 +174,9 @@ public sealed partial class MainWindow : Window
             await FailOverAsync(PlaybackOutcome.Timeout, "no first frame within 4s");
         };
 
-        // 5s of no new frames after playback started. Sampled at 1s so the report is
-        // roughly when the picture froze rather than up to five seconds later.
+        // Sampled at 1s, which is the interval StallDetector's window is calibrated
+        // against. Sampling slower would stretch its four-second window; faster would only
+        // ask mpv the same question more often.
         _stallWatch = DispatcherQueue.CreateTimer();
         _stallWatch.Interval = TimeSpan.FromSeconds(1);
         _stallWatch.Tick += async (_, _) => await CheckForStallAsync();
@@ -285,7 +288,7 @@ public sealed partial class MainWindow : Window
     {
         if (_presenter is null || _session?.Current is null)
         {
-            _stallSeconds = 0;
+            _stalls.Reset();
             return;
         }
 
@@ -318,21 +321,40 @@ public sealed partial class MainWindow : Window
             return;
         }
 
-        if (frames != _framesAtLastCheck)
+        // The detector rather than a frame counter here. Waiting for frames to stop meant
+        // waiting for mpv's 32MiB buffer to play out first, which measured 8.3s, 12.1s and
+        // 19.0s on three cuts of one channel against a 10s budget - see decision 0012. The
+        // buffer draining at real time says the same thing in about five, whatever it holds.
+        if (!_stalls.Observe(new StallSample
         {
-            _framesAtLastCheck = frames;
-            _stallSeconds = 0;
+            FramesPresented = frames,
+            CacheSeconds = ReadCacheSeconds(),
+            At = DateTimeOffset.UtcNow,
+        }))
+        {
             return;
         }
 
-        _stallSeconds++;
-        if (_stallSeconds < 5)
-        {
-            return;
-        }
+        var reason = _stalls.Reason ?? "playback stopped";
+        _stalls.Reset();
 
-        _stallSeconds = 0;
-        await FailOverAsync(PlaybackOutcome.Stall, "no new frames for 5s during playback");
+        await FailOverAsync(PlaybackOutcome.Stall, reason);
+    }
+
+    /// <summary>Seconds of demuxed data buffered ahead, or null when mpv does not say.</summary>
+    /// <remarks>
+    /// Null is a normal answer, not a failure: some containers report nothing here, and the
+    /// detector falls back to counting frames for those.
+    /// </remarks>
+    private double? ReadCacheSeconds()
+    {
+        var raw = _handle?.GetProperty("demuxer-cache-duration");
+
+        return double.TryParse(
+            raw, NumberStyles.Float, CultureInfo.InvariantCulture, out var value) &&
+            !double.IsNaN(value)
+            ? value
+            : null;
     }
 
     /// <summary>Opens a connection, applying the required pragmas.</summary>
@@ -827,7 +849,7 @@ public sealed partial class MainWindow : Window
         _switchTimer = Stopwatch.StartNew();
         _firstFrameSeen = false;
         ClearTracks();
-        _stallSeconds = 0;
+        _stalls.Reset();
         _framesAtOpen = _presenter?.FramesPresented ?? 0;
         StatusText.Text = "opening...";
 
@@ -970,7 +992,7 @@ public sealed partial class MainWindow : Window
         _switchTimer = Stopwatch.StartNew();
         _firstFrameSeen = false;
         ClearTracks();
-        _stallSeconds = 0;
+        _stalls.Reset();
         _framesAtOpen = _presenter?.FramesPresented ?? 0;
         StatusText.Text = status;
 
