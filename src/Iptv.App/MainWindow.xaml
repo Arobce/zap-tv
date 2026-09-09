@@ -183,21 +183,45 @@
                     VerticalAlignment="Top"
                     Background="{StaticResource ZapOverlay}"
                     Padding="20,14">
-                <StackPanel Spacing="2">
-                    <TextBlock x:Name="ChannelTitle"
-                               Text="Select a channel"
-                               FontSize="20"
-                               FontWeight="SemiBold"
-                               Foreground="White" />
-                    <TextBlock x:Name="ProgrammeTitle"
-                               FontSize="13"
-                               Foreground="{StaticResource ZapTextDim}" />
-                    <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · J L seek · M mute · B favourite · digits jump · I hides this"
-                               FontSize="11"
-                               Margin="0,4,0,0"
-                               TextWrapping="Wrap"
-                               Foreground="{StaticResource ZapTextFaint}" />
-                </StackPanel>
+                <Grid ColumnSpacing="16">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <!-- On the overlay rather than the transport bar: the transport bar is
+                         hidden for live, and a channel carrying two audio languages is
+                         exactly where the picker is wanted. -->
+                    <StackPanel Grid.Column="1"
+                                Orientation="Horizontal"
+                                Spacing="8"
+                                VerticalAlignment="Top">
+                        <Button x:Name="AudioTrackButton"
+                                Content="Audio"
+                                Visibility="Collapsed"
+                                Click="OnAudioTracksClicked" />
+                        <Button x:Name="SubtitleTrackButton"
+                                Content="Subtitles"
+                                Visibility="Collapsed"
+                                Click="OnSubtitleTracksClicked" />
+                    </StackPanel>
+
+                    <StackPanel Spacing="2">
+                        <TextBlock x:Name="ChannelTitle"
+                                   Text="Select a channel"
+                                   FontSize="20"
+                                   FontWeight="SemiBold"
+                                   Foreground="White" />
+                        <TextBlock x:Name="ProgrammeTitle"
+                                   FontSize="13"
+                                   Foreground="{StaticResource ZapTextDim}" />
+                        <TextBlock Text="F fullscreen · Space pause · ↑↓ channel · ←→ volume · J L seek · M mute · B favourite · digits jump · I hides this"
+                                   FontSize="11"
+                                   Margin="0,4,0,0"
+                                   TextWrapping="Wrap"
+                                   Foreground="{StaticResource ZapTextFaint}" />
+                    </StackPanel>
+                </Grid>
             </Border>
 
             <!-- Volume and pause feedback, shown briefly on change then hidden. -->

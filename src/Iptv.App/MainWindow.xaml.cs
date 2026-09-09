@@ -335,6 +335,10 @@ public sealed partial class MainWindow : Window
             var ttfb = _switchTimer is { } opened ? (int)opened.ElapsedMilliseconds : (int?)null;
             Log($"first frame after {ttfb}ms on stream {_session.Current.StreamId}");
 
+            // The demuxer has read the headers by now, which is when mpv publishes the
+            // track list. Asked earlier it reports none on a file that has several.
+            RefreshTracks();
+
             await using var connection = await OpenAsync();
             await _session.ReportAsync(
                 connection, PlaybackOutcome.Ok, DateTimeOffset.UtcNow, CancellationToken.None, ttfb);
@@ -847,6 +851,7 @@ public sealed partial class MainWindow : Window
 
         _switchTimer = Stopwatch.StartNew();
         _firstFrameSeen = false;
+        ClearTracks();
         _stallSeconds = 0;
         _framesAtOpen = _presenter?.FramesPresented ?? 0;
         StatusText.Text = "opening...";
@@ -989,6 +994,7 @@ public sealed partial class MainWindow : Window
 
         _switchTimer = Stopwatch.StartNew();
         _firstFrameSeen = false;
+        ClearTracks();
         _stallSeconds = 0;
         _framesAtOpen = _presenter?.FramesPresented ?? 0;
         StatusText.Text = status;
