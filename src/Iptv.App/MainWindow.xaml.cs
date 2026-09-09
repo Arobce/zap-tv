@@ -1123,6 +1123,16 @@ public sealed partial class MainWindow : Window
                 {
                     SetFullScreen(false);
                 }
+                else if (_browser.Search is not null)
+                {
+                    // A search is the innermost thing when one is active, so Escape leaves
+                    // it before it leaves anything else.
+                    _suppressSearch = true;
+                    SearchBox.Text = string.Empty;
+                    _suppressSearch = false;
+
+                    await ApplyAsync(await _browser.SetSearchAsync(null, CancellationToken.None));
+                }
                 else if (await _browser.BackAsync(CancellationToken.None) is { } back)
                 {
                     // The browser knows how many levels there are; a series with one

@@ -155,6 +155,35 @@ public sealed class LibraryRow
         };
     }
 
+    /// <summary>One result from a search across everything.</summary>
+    /// <remarks>
+    /// A programme becomes a live row: what a viewer wants from finding a programme is to
+    /// watch the channel showing it, and the key already is that channel.
+    /// </remarks>
+    public static LibraryRow FromSearchHit(SearchHit hit)
+    {
+        ArgumentNullException.ThrowIfNull(hit);
+
+        var kind = hit.Kind switch
+        {
+            SearchHitKind.Film => LibraryKind.Film,
+            SearchHitKind.Series => LibraryKind.Series,
+            _ => LibraryKind.Live,
+        };
+
+        return new LibraryRow(
+            hit.Key,
+            hit.Title,
+            hit.Subtitle,
+            kind,
+
+            // A series is a container: opening it lists episodes rather than playing.
+            playable: kind != LibraryKind.Series)
+        {
+            SeriesRowId = hit.SeriesRowId,
+        };
+    }
+
     /// <summary>One season, inside an opened series.</summary>
     /// <remarks>
     /// Season 0 is what providers use for specials and for episodes whose season they did
