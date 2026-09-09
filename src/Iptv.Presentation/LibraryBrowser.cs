@@ -20,6 +20,17 @@ public enum LibraryView
 
     /// <summary>Films and episodes that were started and not finished.</summary>
     Continue,
+
+    /// <summary>
+    /// Search across every catalogue at once.
+    /// </summary>
+    /// <remarks>
+    /// Its own view rather than a mode the other tabs drop into. Someone on the channel
+    /// list looking for a channel does not want nine hundred films, so each tab searches
+    /// what it lists and this is where searching everything lives. It has nothing to show
+    /// until something is typed, which is the one view that is true of.
+    /// </remarks>
+    All,
 }
 
 /// <summary>How deep into a series the list currently is.</summary>
@@ -164,12 +175,17 @@ public sealed class LibraryBrowser
 
         await using var connection = await _factory.OpenAsync(cancellationToken).ConfigureAwait(false);
 
-        // A search leaves the tab behind. The PRD asks for one search across channels,
-        // films, series and the guide, and a term that only worked on whichever tab
-        // happened to be open would be the thing it is meant to replace.
+        // A search stays inside the tab it was typed into, scoped to whatever that tab
+        // lists. Searching everything is the All tab's job.
         if (Search is not null)
         {
             return await LoadSearchAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (View == LibraryView.All)
+        {
+            // Nothing to list: this view is a search and nothing else.
+            return Catalogue([], _ => "Type to search channels, films, series and the guide");
         }
 
         return View switch
@@ -269,13 +285,55 @@ public sealed class LibraryBrowser
         };
     }
 
-    /// <summary>Searches everything at once.</summary>
+    /// <summary>Says what was searched, not just that it failed.</summary>
+    /// <remarks>
+    /// "Nothing found" on the Live tab, when the thing is a film, reads as the library
+    /// being wrong rather than as the search being scoped.
+    /// </remarks>
+    private string EmptySearchMessage() => View switch
+    {
+        LibraryView.Live => "no channels match · try the All tab",
+        LibraryView.Films => "no films match · try the All tab",
+        LibraryView.Series => "no series match · try the All tab",
+        _ => "nothing found",
+    };
+
+    private string EmptyContinueMessage() => Search is null
+        ? "nothing part-watched · films and episodes appear here"
+        : "nothing part-watched matches";
+
+    /// <summary>What a search covers, given which tab it was typed into.</summary>
+    /// <remarks>
+    /// Each tab searches what it lists. Favourites and continue-watching are filtered lists
+    /// rather than catalogues, so they filter themselves rather than coming through here.
+    /// </remarks>
+    public SearchScope ScopeForView => View switch
+    {
+        LibraryView.Live => SearchScope.Channels,
+        LibraryView.Films => SearchScope.Films,
+        LibraryView.Series => SearchScope.Series,
+        _ => SearchScope.All,
+    };
+
+    /// <summary>Searches, scoped to whichever tab the term was typed into.</summary>
     private async Task<BrowseResult> LoadSearchAsync(
         Microsoft.Data.Sqlite.SqliteConnection connection,
         CancellationToken cancellationToken)
     {
+        // These two are filtered lists, not catalogues. Their own queries already take a
+        // term, and searching "everything" from inside a filtered list would leave it.
+        if (View == LibraryView.Favourites)
+        {
+            return await LoadFavouritesAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
+
+        if (View == LibraryView.Continue)
+        {
+            return await LoadContinueAsync(connection, cancellationToken).ConfigureAwait(false);
+        }
+
         var hits = await SearchRepository.SearchAsync(
-            connection, Search, SearchPerKind, DateTimeOffset.UtcNow, cancellationToken)
+            connection, Search, SearchPerKind, DateTimeOffset.UtcNow, cancellationToken, ScopeForView)
             .ConfigureAwait(false);
 
         var rows = hits.Select(LibraryRow.FromSearchHit).ToList();
@@ -291,9 +349,7 @@ public sealed class LibraryBrowser
 
         return Catalogue(
             rows,
-            count => count == 0
-                ? "nothing found · Esc or clear the box to go back"
-                : string.Join(" · ", counts));
+            count => count > 0 ? string.Join(" · ", counts) : EmptySearchMessage());
     }
 
     private static string Describe(SearchHitKind kind, int count) => kind switch
@@ -386,11 +442,19 @@ public sealed class LibraryBrowser
         var unfinished = await PlaybackStateRepository.GetContinueWatchingItemsAsync(
             connection, 100, cancellationToken).ConfigureAwait(false);
 
+        // Filtered in memory rather than by a query. This list is capped at 100 by
+        // construction, and a term that matches nothing in it should leave it empty rather
+        // than reaching out into the catalogue.
+        if (Search is { } term)
+        {
+            unfinished = unfinished
+                .Where(i => i.Title.Contains(term, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+        }
+
         return Catalogue(
             unfinished.Select(LibraryRow.FromContinueWatching).ToList(),
-            count => count == 0
-                ? "nothing part-watched · films and episodes appear here"
-                : $"{count:N0} to finish");
+            count => count > 0 ? $"{count:N0} to finish" : EmptyContinueMessage());
     }
 
     private BrowseResult Catalogue(IReadOnlyList<LibraryRow> rows, Func<int, string> summary)

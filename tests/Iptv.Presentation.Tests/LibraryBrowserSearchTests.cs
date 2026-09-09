@@ -61,7 +61,7 @@ public sealed class LibraryBrowserSearchTests : IAsyncDisposable
         => SearchRepository.RebuildStreamIndexAsync(connection, CancellationToken.None);
 
     [Fact]
-    public async Task Searching_from_the_films_tab_still_finds_channels()
+    public async Task A_tab_searches_only_what_it_lists()
     {
         await using var connection = await OpenAsync();
 
@@ -72,12 +72,65 @@ public sealed class LibraryBrowserSearchTests : IAsyncDisposable
         var browser = Browser();
         await browser.SwitchViewAsync(LibraryView.Films, CancellationToken.None);
 
-        // The whole point of a unified search: a term that only worked on the open tab is
-        // the behaviour it replaces.
+        // Someone on the film list looking for a film does not want channels. Each tab
+        // searches what it lists.
+        var films = await browser.SetSearchAsync("sports", CancellationToken.None);
+
+        Assert.Equal("Sports Movie", Assert.Single(films.Rows).Title);
+
+        await browser.SwitchViewAsync(LibraryView.Live, CancellationToken.None);
+        var channels = await browser.SetSearchAsync("sports", CancellationToken.None);
+
+        Assert.Equal("Sky Sports", Assert.Single(channels.Rows).Title);
+    }
+
+    [Fact]
+    public async Task The_All_tab_searches_everything()
+    {
+        await using var connection = await OpenAsync();
+
+        await StreamAsync(connection, "tvg:a", "Sky Sports");
+        await StreamAsync(connection, "name:f", "Sports Movie", kind: "vod");
+        await IndexAsync(connection);
+
+        var browser = Browser();
+        await browser.SwitchViewAsync(LibraryView.All, CancellationToken.None);
+
         var result = await browser.SetSearchAsync("sports", CancellationToken.None);
 
         Assert.Contains(result.Rows, r => r.Title == "Sky Sports");
         Assert.Contains(result.Rows, r => r.Title == "Sports Movie");
+    }
+
+    [Fact]
+    public async Task The_All_tab_says_what_to_do_before_anything_is_typed()
+    {
+        await using var connection = await OpenAsync();
+
+        // It is a search and nothing else, so it has nothing to list until a term arrives.
+        var result = await Browser().SwitchViewAsync(LibraryView.All, CancellationToken.None);
+
+        Assert.Empty(result.Rows);
+        Assert.Contains("Type to search", result.Summary, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task An_empty_scoped_search_points_at_the_All_tab()
+    {
+        await using var connection = await OpenAsync();
+
+        await StreamAsync(connection, "name:f", "Sports Movie", kind: "vod");
+        await IndexAsync(connection);
+
+        var browser = Browser();
+        await browser.SwitchViewAsync(LibraryView.Live, CancellationToken.None);
+
+        // "Nothing found" on the Live tab, when the thing is a film, reads as the library
+        // being wrong rather than as the search being scoped.
+        var result = await browser.SetSearchAsync("sports", CancellationToken.None);
+
+        Assert.Empty(result.Rows);
+        Assert.Contains("All tab", result.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -89,7 +142,9 @@ public sealed class LibraryBrowserSearchTests : IAsyncDisposable
         await StreamAsync(connection, "name:f", "News Film", kind: "vod");
         await IndexAsync(connection);
 
-        var result = await Browser().SetSearchAsync("news", CancellationToken.None);
+        var browser = Browser();
+        await browser.SwitchViewAsync(LibraryView.All, CancellationToken.None);
+        var result = await browser.SetSearchAsync("news", CancellationToken.None);
 
         // Knowing there is one channel among nine hundred films is the value; an
         // undifferentiated count is not.
@@ -121,10 +176,12 @@ public sealed class LibraryBrowserSearchTests : IAsyncDisposable
         await using var connection = await OpenAsync();
         await IndexAsync(connection);
 
-        var result = await Browser().SetSearchAsync("nothingmatchesthis", CancellationToken.None);
+        var browser = Browser();
+        await browser.SwitchViewAsync(LibraryView.All, CancellationToken.None);
+        var result = await browser.SetSearchAsync("nothingmatchesthis", CancellationToken.None);
 
         Assert.Empty(result.Rows);
-        Assert.Contains("clear the box", result.Summary, StringComparison.Ordinal);
+        Assert.Contains("nothing found", result.Summary, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -143,7 +200,9 @@ public sealed class LibraryBrowserSearchTests : IAsyncDisposable
             await command.ExecuteNonQueryAsync(CancellationToken.None);
         }
 
-        var result = await Browser().SetSearchAsync("wire", CancellationToken.None);
+        var browser = Browser();
+        await browser.SwitchViewAsync(LibraryView.Series, CancellationToken.None);
+        var result = await browser.SetSearchAsync("wire", CancellationToken.None);
 
         // A series is a container. Clicking it opens the episode list rather than playing.
         var row = Assert.Single(result.Rows);
