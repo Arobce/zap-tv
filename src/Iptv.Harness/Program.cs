@@ -42,6 +42,8 @@ internal static class Program
                 "guide" => await GuideSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 "search" => await SearchProbe.RunAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "artwork" => await ArtworkSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
+                "probe" => await ProbeAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "killswitch" => await KillSwitchAsync(args, CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -75,6 +77,8 @@ internal static class Program
         Console.WriteLine("  guide           Report the shape of the stored guide; no network");
         Console.WriteLine("  search [term]   Time the unified search across the catalogue; no network");
         Console.WriteLine("  artwork         Report how much of the catalogue has covers; no network");
+        Console.WriteLine("  probe [urls...] Ask each host whether the configured account works there");
+        Console.WriteLine("  killswitch [x]  Cut a real stream mid-playback and time the recovery");
         return 1;
     }
 
@@ -1147,6 +1151,48 @@ internal static class Program
         command.CommandText = sql;
         var value = await command.ExecuteScalarAsync().ConfigureAwait(false);
         return value is null or DBNull ? 0 : Convert.ToInt64(value);
+    }
+
+    /// <summary>Cuts a real stream mid-playback and measures the recovery.</summary>
+    private static async Task<int> KillSwitchAsync(string[] args, CancellationToken cancellationToken)
+    {
+        var search = args.Length > 1 ? args[1] : null;
+
+        var databasePath = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "IptvPlayer",
+            "harness.db");
+
+        await using var connection = await new SqliteConnectionFactory(databasePath)
+            .OpenAsync(cancellationToken).ConfigureAwait(false);
+
+        var (title, url) = await FindStreamAsync(connection, search, cancellationToken)
+            .ConfigureAwait(false);
+
+        if (url is null)
+        {
+            Console.Error.WriteLine(
+                search is null
+                    ? "No streams in the library. Run 'sync' first."
+                    : $"No active stream matching '{search}'.");
+            return 1;
+        }
+
+        return await KillSwitchDrill.RunAsync(title!, url, cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>Asks one or more hosts whether the configured account works on them.</summary>
+    private static async Task<int> ProbeAsync(string[] args, CancellationToken cancellationToken)
+    {
+        if (LoadCredentials() is not { } credentials)
+        {
+            Console.Error.WriteLine(
+                "No .local/provider.env found. Expected XTREAM_HOST, XTREAM_USER, XTREAM_PASS.");
+            return 1;
+        }
+
+        return await ProviderProbe.RunAsync(args, credentials, cancellationToken)
+            .ConfigureAwait(false);
     }
 
     /// <summary>Reads credentials from the gitignored local env file.</summary>

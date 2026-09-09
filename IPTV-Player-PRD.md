@@ -679,12 +679,23 @@ Write every attempt to `stream_health`, subject to the Phase 1 retention policy.
 - A fixture with two same-named channels from different countries produces no failover between them.
 - Diagnostics view shows accurate per-provider stats after a synthetic run.
 
-Status: the second is covered by unit tests. The first is proved offline by
-`dotnet run --project src/Iptv.Harness -- drill`, which drives real mpv from a dead URL to
-a working stream and recovers in 2,146ms — but against one provider, since the reference
-account is the only one configured. The literal firewall-kill form and cross-provider
-failover both need a second provider and remain unproved. The third has the data behind it
+Status: the second is covered by unit tests. The third has the data behind it
 (`StreamHealthRepository.GetProviderHealthAsync`) but no view yet; that belongs to Phase 9.
+
+The first is now measured against a real mid-stream cut by
+`dotnet run --project src/Iptv.Harness -- killswitch`, which plays a real channel through a
+local TCP forwarder and severs it — the same failure a firewall rule produces, without
+needing elevation. **It failed.** Recovery took 8.3s, 12.1s and 19.0s on three runs, scaling
+with how much mpv had buffered, because the frame-based detector could not start counting
+until a 32MiB buffer had played out. Detection now watches the buffer draining at real time
+and lands at 5.16s / 5.20s / 6.0s, constant regardless of buffer depth. See
+[0012](docs/decisions/0012-stall-detection.md).
+
+Still unproved: **cross-provider** failover, which the criterion also asks for. One account
+is configured, and `harness probe` confirms the second host on record does not resolve — so
+this needs a second subscription and nothing in the build can substitute for it. What is
+proved is detection and recovery inside the budget against a genuine cut, failing over to a
+second candidate for the same channel.
 
 ---
 
