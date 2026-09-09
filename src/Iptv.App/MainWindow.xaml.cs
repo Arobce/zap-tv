@@ -590,6 +590,7 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private void UpdateModeButtons()
     {
+        AllTab.IsEnabled = _browser.View != LibraryView.All;
         LiveTab.IsEnabled = _browser.View != LibraryView.Live;
         FilmsTab.IsEnabled = _browser.View != LibraryView.Films;
         SeriesTab.IsEnabled = _browser.View != LibraryView.Series;

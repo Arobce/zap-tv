@@ -14,6 +14,25 @@ public enum SearchHitKind
     Programme,
 }
 
+/// <summary>Which catalogues a search covers.</summary>
+/// <remarks>
+/// A search should look through whatever the list it was typed into is showing. Someone on
+/// the channel list looking for a channel does not want nine hundred films, and a single
+/// unified search is a separate thing rather than the only thing.
+/// </remarks>
+[Flags]
+public enum SearchScope
+{
+    Channels = 1,
+    Films = 2,
+    Series = 4,
+
+    /// <summary>The guide. Included only in a search across everything.</summary>
+    Programmes = 8,
+
+    All = Channels | Films | Series | Programmes,
+}
+
 /// <summary>One search result.</summary>
 public sealed record SearchHit
 {
@@ -124,7 +143,8 @@ public static class SearchRepository
         string? term,
         int limitPerKind,
         DateTimeOffset now,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        SearchScope scope = SearchScope.All)
     {
         ArgumentNullException.ThrowIfNull(connection);
 
@@ -135,17 +155,31 @@ public static class SearchRepository
 
         var results = new List<SearchHit>();
 
-        await AddStreamsAsync(connection, match, "live", SearchHitKind.Channel, limitPerKind,
-            results, cancellationToken).ConfigureAwait(false);
+        // Only the requested catalogues are queried, not filtered afterwards. A scoped
+        // search should cost less than an unscoped one, not the same.
+        if (scope.HasFlag(SearchScope.Channels))
+        {
+            await AddStreamsAsync(connection, match, "live", SearchHitKind.Channel, limitPerKind,
+                results, cancellationToken).ConfigureAwait(false);
+        }
 
-        await AddStreamsAsync(connection, match, "vod", SearchHitKind.Film, limitPerKind,
-            results, cancellationToken).ConfigureAwait(false);
+        if (scope.HasFlag(SearchScope.Films))
+        {
+            await AddStreamsAsync(connection, match, "vod", SearchHitKind.Film, limitPerKind,
+                results, cancellationToken).ConfigureAwait(false);
+        }
 
-        await AddSeriesAsync(connection, match, limitPerKind, results, cancellationToken)
-            .ConfigureAwait(false);
+        if (scope.HasFlag(SearchScope.Series))
+        {
+            await AddSeriesAsync(connection, match, limitPerKind, results, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
-        await AddProgrammesAsync(connection, match, limitPerKind, now, results, cancellationToken)
-            .ConfigureAwait(false);
+        if (scope.HasFlag(SearchScope.Programmes))
+        {
+            await AddProgrammesAsync(connection, match, limitPerKind, now, results, cancellationToken)
+                .ConfigureAwait(false);
+        }
 
         return results;
     }
