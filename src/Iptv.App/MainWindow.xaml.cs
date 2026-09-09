@@ -49,19 +49,8 @@ public sealed partial class MainWindow : Window
         "IptvPlayer",
         "harness.db");
 
-    /// <summary>
-    /// Diagnostic log for the slice.
-    /// </summary>
-    /// <remarks>
-    /// A GUI has nowhere to print, and reading state off screenshots is guesswork. Serilog
-    /// replaces this once there is a settings surface to configure it from; for now the
-    /// point is simply to be able to see what happened.
-    /// </remarks>
-    private static readonly string LogPath = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-        "IptvPlayer",
-        "logs",
-        "app.log");
+    /// <summary>Diagnostic log for the slice. See <see cref="AppLog"/>.</summary>
+    private static readonly string LogPath = AppLog.Path;
 
     private readonly DispatcherQueueTimer _searchDebounce;
     private readonly DispatcherQueueTimer _heartbeat;
@@ -76,23 +65,7 @@ public sealed partial class MainWindow : Window
     /// </remarks>
     private readonly LibraryBrowser _browser;
 
-    private static void Log(string message)
-    {
-        try
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(LogPath)!);
-
-            // Scrubbed: stream URLs carry the account's credentials, and this file is
-            // exactly the sort of thing that ends up pasted into a bug report.
-            File.AppendAllText(
-                LogPath,
-                $"{DateTimeOffset.Now:HH:mm:ss.fff}  {Iptv.Core.Xtream.CredentialScrubber.Scrub(message)}{Environment.NewLine}");
-        }
-        catch (IOException)
-        {
-            // Diagnostics must never take the app down.
-        }
-    }
+    private static void Log(string message) => AppLog.Write(message);
 
     private MpvHandle? _handle;
     private VideoPresenter? _presenter;

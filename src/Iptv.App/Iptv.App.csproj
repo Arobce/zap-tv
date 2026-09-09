@@ -24,11 +24,26 @@
     -->
     <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
     <EnableMsixTooling>false</EnableMsixTooling>
+
+    <!--
+      Velopack drives install, update and uninstall by re-running this executable with
+      its own arguments, and its handler has to be the first thing that happens. The XAML
+      compiler's generated Main starts the UI instead, so it is switched off and Program.cs
+      takes over. See src/Iptv.App/Program.cs.
+    -->
+    <DefineConstants>$(DefineConstants);DISABLE_XAML_GENERATED_MAIN</DefineConstants>
+
+    <!--
+      The version the installer stamps and the running app reports. Overridden by the
+      packaging script, which takes it from the tag being released.
+    -->
+    <Version Condition="'$(Version)' == ''">0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.WindowsAppSDK" />
     <PackageReference Include="Microsoft.Windows.SDK.BuildTools" />
+    <PackageReference Include="Velopack" />
   </ItemGroup>
 
   <ItemGroup>
@@ -36,5 +51,29 @@
     <ProjectReference Include="..\Iptv.Mpv\Iptv.Mpv.csproj" />
     <ProjectReference Include="..\Iptv.Presentation\Iptv.Presentation.csproj" />
   </ItemGroup>
+
+  <!--
+    Publish the application's own PRI file.
+
+    The framework PRIs — Microsoft.UI.Xaml.Controls.pri and the rest — are published
+    already. The application's is not: it is added to the publish set by the MSIX tooling,
+    which this project switches off because it ships a Velopack installer and a portable
+    folder rather than an MSIX.
+
+    Without it the published app exits during startup with 0xC000027B, a stowed WinRT
+    exception, before reaching any code that could log why. It builds, it publishes, and
+    it fails only when run, which is why this is asserted in scripts/publish.ps1 as well
+    as fixed here.
+  -->
+  <Target Name="PublishApplicationPri"
+          BeforeTargets="ComputeResolvedFilesToPublishList"
+          Condition="Exists('$(ProjectPriFullPath)')">
+    <ItemGroup>
+      <ResolvedFileToPublish Include="$(ProjectPriFullPath)">
+        <RelativePath>$(ProjectPriFileName)</RelativePath>
+        <CopyToPublishDirectory>PreserveNewest</CopyToPublishDirectory>
+      </ResolvedFileToPublish>
+    </ItemGroup>
+  </Target>
 
 </Project>

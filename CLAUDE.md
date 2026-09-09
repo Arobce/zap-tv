@@ -10,7 +10,16 @@ tutorial disagree, the PRD wins.
 dotnet build                      # solution is Iptv.slnx
 dotnet test
 dotnet run --project src/Iptv.Harness -- <command>
+
+pwsh ./scripts/fetch-libmpv.ps1              # native binary for this machine
+pwsh ./scripts/fetch-libmpv.ps1 -Rid both    # both shipping architectures
+pwsh ./scripts/publish.ps1 -Version 0.1.0 -Rid both
 ```
+
+`libmpv-2.dll` is 120MB and is not committed. It lives in `.local/native/mpv/<rid>/`, one
+per architecture: shipping the x64 binary in an ARM64 package fails at load time with an
+error that reads as a missing dependency. The mpv release is pinned; see
+`docs/decisions/0001-libmpv-render-api.md` before moving it.
 
 Toolchain: .NET 10 SDK. `Iptv.Core` and its tests are platform-neutral (`net10.0`);
 `Iptv.Mpv`, `Iptv.Harness` and `Iptv.App` target `net10.0-windows`.

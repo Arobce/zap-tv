@@ -742,8 +742,10 @@ Full keyboard control is a differentiator: arrow navigation, number entry for di
 - **Velopack** for installer and delta auto-update. It is the maintained successor to Squirrel and is substantially less friction than MSIX for self-distribution.
 - Code signing certificate is required, not optional. Unsigned installers trigger SmartScreen warnings that will stop most users cold. Note that OV and EV code signing certificates both now require hardware or HSM key storage, so a token is a baseline requirement rather than an upgrade; EV builds SmartScreen reputation faster.
 - Publish self-contained per-RID with `PublishReadyToRun=true`: `win-x64` and `win-arm64`, each carrying the matching `libmpv-2.dll`. Shipping the x64 binary in an ARM64 package fails at load time with an error that reads as a missing dependency rather than an architecture mismatch.
-- Expect roughly 120–180MB installed once libmpv is included.
+- Expect roughly **337MB installed and 133MB downloaded**. This corrects an earlier estimate of 120–180MB, which counted libmpv and the app but not the two runtimes underneath them: a self-contained .NET 10 publish plus `WindowsAppSDKSelfContained` account for most of the difference, and ReadyToRun adds precompiled native code on top of the IL it does not replace. `WindowsAppSDKSelfContained` is not optional — without it the installed app also needs the Windows App SDK runtime, and someone unzipping a portable folder has no installer to pull it in. Measured in [0011](docs/decisions/0011-packaging.md).
+- Delta updates make the size tolerable: one build to the next moved **176KB**, patching 8 files of 518.
 - Ship an unpackaged build too — HTPC users often want a portable folder.
+- Build with `scripts/publish.ps1`; fetch the native binaries first with `scripts/fetch-libmpv.ps1 -Rid both`. The publish script reads the PE machine field of both the executable and `libmpv-2.dll` and refuses to package a mismatch, per the failure Phase 0.3 identified.
 
 ---
 
