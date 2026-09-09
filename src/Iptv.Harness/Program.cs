@@ -44,6 +44,7 @@ internal static class Program
                 "artwork" => await ArtworkSurvey.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 "probe" => await ProbeAsync(args, CancellationToken.None).ConfigureAwait(false),
                 "killswitch" => await KillSwitchAsync(args, CancellationToken.None).ConfigureAwait(false),
+                "diagnostics" => await DiagnosticsDump.RunAsync(CancellationToken.None).ConfigureAwait(false),
                 _ => Help(),
             };
         }
@@ -79,6 +80,7 @@ internal static class Program
         Console.WriteLine("  artwork         Report how much of the catalogue has covers; no network");
         Console.WriteLine("  probe [urls...] Ask each host whether the configured account works there");
         Console.WriteLine("  killswitch [x]  Cut a real stream mid-playback and time the recovery");
+        Console.WriteLine("  diagnostics     Print the diagnostics panel; no network");
         return 1;
     }
 

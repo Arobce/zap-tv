@@ -82,6 +82,30 @@ public sealed class LibraryRow
     /// <summary>Artwork, already checked. Null when the provider gave nothing usable.</summary>
     public string? ImageUrl { get; private init; }
 
+    /// <summary>
+    /// Whether this row can be favourited.
+    /// </summary>
+    /// <remarks>
+    /// Live channels only. The flag lives on <c>channels.is_favorite</c> and the favourites
+    /// view lists channels that have a live stream behind them, so favouriting a film would
+    /// write a row that the view it was meant to appear in then filters out — a star that
+    /// lights up and does nothing.
+    /// </remarks>
+    public bool CanFavourite => Kind == LibraryKind.Live;
+
+    /// <summary>
+    /// Whether it currently is one.
+    /// </summary>
+    /// <remarks>
+    /// Settable, unlike everything else here. It is the one piece of a row the user changes
+    /// without reloading the list, and rebuilding the page to redraw one star would lose
+    /// the scroll position.
+    /// </remarks>
+    public bool IsFavourite { get; set; }
+
+    /// <summary>The star to draw. Filled when favourited.</summary>
+    public string FavouriteGlyph => IsFavourite ? "★" : "☆";
+
     /// <summary>Whether there is artwork to draw instead of a lettered placeholder.</summary>
     public bool HasImage => ImageUrl is not null;
 
@@ -134,6 +158,7 @@ public sealed class LibraryRow
             ProgressPercent = (item.NowProgress ?? 0) * 100,
             ShowProgress = item.NowProgress is not null,
             ImageUrl = Artwork(item.LogoUrl),
+            IsFavourite = item.IsFavorite,
         };
     }
 
