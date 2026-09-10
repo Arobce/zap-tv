@@ -20,17 +20,6 @@ public sealed class MpvEventLoopTests
 
     public MpvEventLoopTests(ITestOutputHelper output) => _output = output;
 
-    private bool Available()
-    {
-        if (MpvLibrary.IsAvailable())
-        {
-            return true;
-        }
-
-        _output.WriteLine("libmpv-2.dll not present; skipping.");
-        return false;
-    }
-
     private static MpvHandle CreateHandle() => MpvHandle.Create(new Dictionary<string, string>
     {
         ["vo"] = "libmpv",
@@ -65,13 +54,10 @@ public sealed class MpvEventLoopTests
         return null;
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Observes_a_property_change()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         using var loop = new MpvEventLoop(handle);
@@ -88,13 +74,10 @@ public sealed class MpvEventLoopTests
         Assert.True(change.AsFlag);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Reports_playback_lifecycle_events()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
 
@@ -116,13 +99,10 @@ public sealed class MpvEventLoopTests
         Assert.NotNull(loaded);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Reports_hwdec_current_for_a_real_decode()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         using var loop = new MpvEventLoop(handle);
@@ -147,13 +127,10 @@ public sealed class MpvEventLoopTests
             "hwdec-current arrived in an unreadable shape.");
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Routes_mpv_log_messages()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         using var loop = new MpvEventLoop(handle);
@@ -174,13 +151,10 @@ public sealed class MpvEventLoopTests
         Assert.NotEmpty(log.Level);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Reports_why_playback_ended()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         using var loop = new MpvEventLoop(handle);
@@ -199,13 +173,10 @@ public sealed class MpvEventLoopTests
         Assert.Equal(4, ended.Reason);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Disposing_stops_the_pump_promptly()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         var loop = new MpvEventLoop(handle);
@@ -224,13 +195,10 @@ public sealed class MpvEventLoopTests
             $"Event loop took {stopwatch.ElapsedMilliseconds}ms to stop.");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Disposing_without_starting_is_safe()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         var loop = new MpvEventLoop(handle);

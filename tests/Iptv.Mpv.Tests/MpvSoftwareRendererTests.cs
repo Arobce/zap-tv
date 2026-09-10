@@ -28,17 +28,6 @@ public sealed class MpvSoftwareRendererTests
 
     public MpvSoftwareRendererTests(ITestOutputHelper output) => _output = output;
 
-    private bool Available()
-    {
-        if (MpvLibrary.IsAvailable())
-        {
-            return true;
-        }
-
-        _output.WriteLine("libmpv-2.dll not present; skipping.");
-        return false;
-    }
-
     private static MpvHandle CreateHandle() => MpvHandle.Create(new Dictionary<string, string>
     {
         ["vo"] = "libmpv",
@@ -48,13 +37,10 @@ public sealed class MpvSoftwareRendererTests
         ["audio"] = "no",
     });
 
-    [Fact]
+    [SkippableFact]
     public void Creates_and_frees_a_software_render_context()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         using var renderer = MpvSoftwareRenderer.Create(handle);
@@ -62,13 +48,10 @@ public sealed class MpvSoftwareRendererTests
         Assert.False(renderer.IsDisposed);
     }
 
-    [Fact]
+    [SkippableFact]
     public async Task Renders_an_actual_frame()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         using var renderer = MpvSoftwareRenderer.Create(handle);
@@ -103,13 +86,10 @@ public sealed class MpvSoftwareRendererTests
         Assert.True(rendered, "No non-black frame was produced within 20s.");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Render_rejects_a_buffer_that_is_too_small()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         using var renderer = MpvSoftwareRenderer.Create(handle);
@@ -120,13 +100,10 @@ public sealed class MpvSoftwareRendererTests
         Assert.Throws<ArgumentException>(() => renderer.Render(tooSmall, Width, Height));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Render_context_can_be_freed_repeatedly()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = CreateHandle();
         var renderer = MpvSoftwareRenderer.Create(handle);
@@ -137,13 +114,10 @@ public sealed class MpvSoftwareRendererTests
         Assert.True(renderer.IsDisposed);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Repeated_create_and_free_cycles_do_not_exhaust_resources()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         // Phase 5 exit criterion covers render context lifetime specifically. Freeing the
         // context after its handle, or not at all, survives a short run and fails a long

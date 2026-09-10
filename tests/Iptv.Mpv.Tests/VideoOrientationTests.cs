@@ -33,52 +33,7 @@ public sealed class VideoOrientationTests
     private const string SplitSource =
         "av://lavfi:color=c=red:size=64x32:rate=30,pad=64:64:0:0:blue,format=rgb24";
 
-    private void OnGlThread(Action body)
-    {
-        Exception? failure = null;
-
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                using var context = WglContext.Create();
-                context.MakeCurrent();
-
-                var capabilities = context.Query();
-                if (!capabilities.SupportsHardwarePath)
-                {
-                    _output.WriteLine(
-                        $"Driver cannot support the hardware path ({capabilities.Renderer}); skipping.");
-                    return;
-                }
-
-                if (!MpvLibrary.IsAvailable())
-                {
-                    _output.WriteLine("libmpv-2.dll not present; skipping.");
-                    return;
-                }
-
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-            finally
-            {
-                WglContext.ClearCurrent();
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join(TimeSpan.FromMinutes(2));
-
-        if (failure is not null)
-        {
-            throw new Xunit.Sdk.XunitException(failure.ToString());
-        }
-    }
+    private static void OnGlThread(Action body) => GlThread.Run(body);
 
     /// <summary>Averages a row, so one stray pixel of scaler ringing cannot decide the test.</summary>
     private static (int R, int G, int B) SampleRow(byte[] bgra, int row)
@@ -96,7 +51,7 @@ public sealed class VideoOrientationTests
         return ((int)(r / Size), (int)(g / Size), (int)(b / Size));
     }
 
-    [Fact]
+    [SkippableFact]
     public void The_top_of_the_source_is_the_top_of_the_shared_texture()
     {
         OnGlThread(() =>

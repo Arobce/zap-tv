@@ -25,56 +25,7 @@ public sealed class MpvOpenGlRendererTests
 
     public MpvOpenGlRendererTests(ITestOutputHelper output) => _output = output;
 
-    /// <summary>
-    /// Runs work on a dedicated thread holding a current GL context.
-    /// </summary>
-    private void OnGlThread(Action<WglContext> body)
-    {
-        Exception? failure = null;
-
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                using var context = WglContext.Create();
-                context.MakeCurrent();
-
-                var capabilities = context.Query();
-                if (!capabilities.SupportsHardwarePath)
-                {
-                    _output.WriteLine(
-                        $"Driver cannot support the hardware path ({capabilities.Renderer}, " +
-                        $"GL {capabilities.Version}, NV_DX_interop2={capabilities.HasDxInterop}); skipping.");
-                    return;
-                }
-
-                if (!MpvLibrary.IsAvailable())
-                {
-                    _output.WriteLine("libmpv-2.dll not present; skipping.");
-                    return;
-                }
-
-                body(context);
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-            finally
-            {
-                WglContext.ClearCurrent();
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join(TimeSpan.FromMinutes(2));
-
-        if (failure is not null)
-        {
-            throw new Xunit.Sdk.XunitException(failure.ToString());
-        }
-    }
+    private static void OnGlThread(Action<WglContext> body) => GlThread.Run(body);
 
     private static MpvHandle CreateHandle() => MpvHandle.Create(new Dictionary<string, string>
     {
@@ -84,7 +35,7 @@ public sealed class MpvOpenGlRendererTests
         ["audio"] = "no",
     });
 
-    [Fact]
+    [SkippableFact]
     public void Creates_an_opengl_render_context()
     {
         OnGlThread(_ =>
@@ -99,7 +50,7 @@ public sealed class MpvOpenGlRendererTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Renders_a_frame_into_the_default_framebuffer()
     {
         OnGlThread(_ =>
@@ -132,7 +83,7 @@ public sealed class MpvOpenGlRendererTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Renders_many_frames_without_failing()
     {
         OnGlThread(_ =>
@@ -166,7 +117,7 @@ public sealed class MpvOpenGlRendererTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Repeated_create_and_free_cycles_are_clean()
     {
         OnGlThread(_ =>
