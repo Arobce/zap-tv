@@ -125,12 +125,16 @@ jobs:
           # SmartScreen warning with no warning of its own.
           draft: true
           generate_release_notes: true
+          # Only the two files a person downloads, and only these because they are the
+          # only ones whose names carry the architecture. vpk names its package
+          # ZapTV-<version>-full.nupkg and its feed RELEASES, identically for both
+          # architectures, so attaching those from two matrix legs would collide - one
+          # would silently overwrite the other and the release would offer an ARM64 update
+          # to x64 machines. They stay on the workflow run, where they are namespaced per
+          # architecture, until there is an update feed that has been designed and tested.
           files: |
             artifacts/**/ZapTV-*-Setup.exe
             artifacts/**/ZapTV-*-portable.zip
-            artifacts/**/*.nupkg
-            artifacts/**/RELEASES
-            artifacts/**/releases.win.json
           body: |
             ## Install
 
