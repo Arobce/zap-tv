@@ -1,0 +1,149 @@
+name: Release
+
+# Tag a version and the installers appear on the releases page.
+#
+#   git tag v0.1.0
+#   git push origin v0.1.0
+#
+# Or run it by hand from the Actions tab, which is the way to rehearse one without
+# spending a tag on it.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build, without the leading v (e.g. 0.1.0)'
+        required: true
+        type: string
+
+permissions:
+  # Needed to create the release and upload to it. Nothing else, so a compromised
+  # dependency in the build cannot push code.
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    strategy:
+      # Both architectures always, and neither cancels the other: an ARM64 failure must
+      # not throw away a finished x64 build, because they fail for unrelated reasons.
+      fail-fast: false
+      matrix:
+        rid: [win-x64, win-arm64]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Work out the version
+        id: version
+        shell: pwsh
+        run: |
+          # From the tag when there is one, from the input when run by hand. Refused
+          # rather than defaulted: an installer stamped 0.0.0 is one nothing will ever
+          # update from.
+          $version = if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $env:GITHUB_REF -replace '^refs/tags/v', ''
+          } else {
+            '${{ inputs.version }}'
+          }
+
+          if (-not $version) { throw 'No version: push a v* tag or supply the input.' }
+          if ($version -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$') {
+            throw "Not a version Velopack can order releases by: $version"
+          }
+
+          "version=$version" >> $env:GITHUB_OUTPUT
+          Write-Host "Building $version for ${{ matrix.rid }}"
+
+      # 120MB per architecture and pinned, so it is worth not fetching on every run.
+      # Keyed on the script, which is where the pinned release tag lives.
+      - name: Cache libmpv
+        uses: actions/cache@v4
+        with:
+          path: .local/native/mpv/${{ matrix.rid }}
+          key: libmpv-${{ matrix.rid }}-${{ hashFiles('scripts/fetch-libmpv.ps1') }}
+
+      - name: Fetch libmpv
+        shell: pwsh
+        run: ./scripts/fetch-libmpv.ps1 -Rid ${{ matrix.rid }}
+
+      - name: Install vpk
+        shell: pwsh
+        run: dotnet tool install -g vpk --version 1.2.0
+
+      - name: Test
+        # Before packaging, not after. A release that fails its own tests should not
+        # reach the point of having artifacts to upload.
+        run: dotnet test --configuration Release
+
+      - name: Publish and package
+        shell: pwsh
+        run: ./scripts/publish.ps1 -Version ${{ steps.version.outputs.version }} -Rid ${{ matrix.rid }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: zaptv-${{ matrix.rid }}
+          path: |
+            artifacts/ZapTV-*-Setup.exe
+            artifacts/ZapTV-*-portable.zip
+            artifacts/releases/${{ matrix.rid }}/*.nupkg
+            artifacts/releases/${{ matrix.rid }}/RELEASES
+            artifacts/releases/${{ matrix.rid }}/releases.win.json
+          if-no-files-found: error
+          # A 137MB installer per architecture. Kept long enough to investigate a bad
+          # release, not indefinitely.
+          retention-days: 30
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+
+    # Only a tag makes a release. A manual run builds and leaves the artifacts on the
+    # workflow, which is what rehearsing one should do.
+    if: startsWith(github.ref, 'refs/tags/v')
+
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: List what will be published
+        run: find artifacts -type f -printf '%10s  %p\n' | sort -k2
+
+      - name: Create the release
+        uses: softprops/action-gh-release@v2
+        with:
+          # Draft, deliberately. The installers are unsigned until there is a certificate
+          # on a hardware token, and a release that publishes itself would hand people a
+          # SmartScreen warning with no warning of its own.
+          draft: true
+          generate_release_notes: true
+          files: |
+            artifacts/**/ZapTV-*-Setup.exe
+            artifacts/**/ZapTV-*-portable.zip
+            artifacts/**/*.nupkg
+            artifacts/**/RELEASES
+            artifacts/**/releases.win.json
+          body: |
+            ## Install
+
+            Download `ZapTV-<version>-win-x64-Setup.exe` and run it. On an ARM64 machine
+            take the `win-arm64` build instead — the x64 one fails at load with an error
+            that reads as a missing dependency rather than an architecture mismatch.
+
+            Prefer no installer? `ZapTV-<version>-win-x64-portable.zip` unzips to a folder
+            you can run from anywhere, including a USB stick.
+
+            **These builds are not code signed.** SmartScreen will warn on first run:
+            "More info" then "Run anyway". Signing needs an OV or EV certificate, and both
+            now require the key to live on a hardware token.
+
+            ZapTV is bring-your-own-provider. It ships no playlists and no sources; add
+            your Xtream credentials in Settings after installing.
