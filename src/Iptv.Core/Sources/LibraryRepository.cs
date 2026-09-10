@@ -147,6 +147,12 @@ public static class LibraryRepository
                 min(s.id)
             FROM series s
             WHERE (@search IS NULL OR s.title LIKE '%' || @search || '%')
+              AND (@category IS NULL OR EXISTS (
+                     SELECT 1 FROM categories cat
+                      WHERE cat.provider_id = s.provider_id
+                        AND cat.kind        = 'series'
+                        AND cat.category_id = s.category_id
+                        AND cat.name        = @category))
             GROUP BY s.series_key
             ORDER BY (max(s.year) IS NULL), max(s.year) DESC, min(s.title)
             LIMIT @limit OFFSET @offset;

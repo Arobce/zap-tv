@@ -156,7 +156,7 @@ public sealed class LibraryBrowserTests : IAsyncDisposable
     }
 
     [Fact]
-    public async Task Only_live_and_films_have_categories()
+    public async Task Only_the_three_catalogues_have_categories()
     {
         await using var connection = await OpenAsync();
         await SeedProviderAsync(connection);
@@ -169,9 +169,12 @@ public sealed class LibraryBrowserTests : IAsyncDisposable
         await browser.SwitchViewAsync(LibraryView.Films, CancellationToken.None);
         Assert.Equal(CategoryKind.Vod, browser.CategoryKindForView);
 
-        // Series have no column to join categories to; the other two are already filtered
-        // lists, and a category on top would be a filter on a filter.
-        foreach (var view in new[] { LibraryView.Series, LibraryView.Favourites, LibraryView.Continue })
+        await browser.SwitchViewAsync(LibraryView.Series, CancellationToken.None);
+        Assert.Equal(CategoryKind.Series, browser.CategoryKindForView);
+
+        // Favourites and continue-watching are already filtered lists, and a category on
+        // top would be a filter on a filter. All has no single catalogue to draw from.
+        foreach (var view in new[] { LibraryView.Favourites, LibraryView.Continue, LibraryView.All })
         {
             await browser.SwitchViewAsync(view, CancellationToken.None);
             Assert.False(browser.SupportsCategories);

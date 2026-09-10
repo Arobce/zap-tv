@@ -136,17 +136,18 @@ public sealed class LibraryBrowser
 
     /// <summary>Whether the category picker applies to the current view.</summary>
     /// <remarks>
-    /// Series have no categories to filter by: the provider publishes them but the series
-    /// table has no column to join them to. Favourites and continue-watching are already
-    /// filtered lists, and a category on top would be a filter on a filter.
+    /// The three catalogues, and not the two views over them. Favourites and
+    /// continue-watching are already filtered lists, and a category on top would be a
+    /// filter on a filter; the All tab has no single catalogue to take categories from.
     /// </remarks>
-    public bool SupportsCategories => View is LibraryView.Live or LibraryView.Films;
+    public bool SupportsCategories => View is LibraryView.Live or LibraryView.Films or LibraryView.Series;
 
     /// <summary>The category kind for the current view, or null when it has none.</summary>
     public CategoryKind? CategoryKindForView => View switch
     {
         LibraryView.Live => CategoryKind.Live,
         LibraryView.Films => CategoryKind.Vod,
+        LibraryView.Series => CategoryKind.Series,
         _ => null,
     };
 
@@ -418,7 +419,7 @@ public sealed class LibraryBrowser
     {
         var series = await LibraryRepository.GetSeriesAsync(
             connection,
-            new CatalogueQuery { Search = Search, Limit = PageSize },
+            new CatalogueQuery { Search = Search, Category = Category, Limit = PageSize },
             cancellationToken).ConfigureAwait(false);
 
         return Catalogue(
