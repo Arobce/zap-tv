@@ -1,0 +1,8 @@
+{
+  "//": "Pins the SDK band so CI and a developer machine agree. Without this, CI resolves whatever 10.0.x it finds, and a build that passes locally can fail there for reasons that have nothing to do with the change.",
+  "sdk": {
+    "version": "10.0.400",
+    "rollForward": "latestFeature",
+    "allowPrerelease": false
+  }
+}

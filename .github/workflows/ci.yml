@@ -19,7 +19,18 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          # The pinned band, not "10.0.x". Resolving whatever is newest means CI can build
+          # with a different SDK than anyone developing, and then a green local build and a
+          # red CI one differ for reasons that have nothing to do with the change.
+          global-json-file: global.json
+
+      - name: Report the toolchain
+        # First thing in the log. When a build fails only on CI, the SDK it actually
+        # picked is the first question, and it should not need a re-run to answer.
+        shell: pwsh
+        run: |
+          dotnet --version
+          dotnet --list-sdks
 
       - name: Restore
         run: dotnet restore
@@ -37,6 +48,63 @@ jobs:
           name: test-results
           path: artifacts/test-results
 
+  # libmpv is not committed, so the build above runs with it absent and the tests that
+  # need it skip themselves. This job is what stops that being invisible: it fetches the
+  # real binary and runs the same suite, so a skip that has quietly become permanent shows
+  # up as a count that stopped moving rather than as a green tick.
+  playback:
+    runs-on: windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Cache libmpv
+        uses: actions/cache@v4
+        with:
+          path: .local/native/mpv/win-x64
+          key: libmpv-win-x64-${{ hashFiles('scripts/fetch-libmpv.ps1') }}
+
+      - name: Fetch libmpv
+        shell: pwsh
+        run: ./scripts/fetch-libmpv.ps1 -Rid win-x64
+
+      - name: Test with the real library
+        # A GitHub runner has no GPU, so anything needing a WGL context still skips. What
+        # this proves is that the P/Invoke surface matches the shipping binary — which is
+        # the thing that breaks silently when libmpv is upgraded.
+        run: dotnet test tests/Iptv.Mpv.Tests --configuration Release
+
+  # Every source file must actually be in the repository.
+  #
+  # Six files under src/Iptv.Mpv/Native were not, for weeks: the stock .gitignore carries a
+  # bare "native/" rule and git is case-insensitive on Windows. Every local build worked
+  # because the files were on disk, and every clone failed. The working tree is the one
+  # place this is invisible, so the check has to ask git rather than the filesystem.
+  nothing-is-ignored:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Look for ignored sources
+        run: |
+          ignored=$(find src tests -type f \
+            \( -name '*.cs' -o -name '*.sql' -o -name '*.csproj' -o -name '*.xaml' \) \
+            -not -path '*/obj/*' -not -path '*/bin/*' -print0 \
+            | xargs -0 --no-run-if-empty git check-ignore -v || true)
+
+          if [ -n "$ignored" ]; then
+            echo "::error::Source files are being ignored and will not reach a clone:"
+            echo "$ignored"
+            exit 1
+          fi
+
+          echo "No source file is ignored."
+
   core-is-portable:
     # Iptv.Core must build and test on a machine with no Windows workload at all.
     # If this job fails, something platform-specific leaked into Core.
@@ -47,10 +115,18 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: '10.0.x'
+          global-json-file: global.json
 
       - name: Build Iptv.Core
         run: dotnet build src/Iptv.Core --configuration Release
 
       - name: Test Iptv.Core
         run: dotnet test tests/Iptv.Core.Tests --configuration Release
+
+      - name: Build Iptv.Presentation
+        # Platform-neutral too, and the reason it exists: view models that need the
+        # Windows workload to test are view models nobody tests.
+        run: dotnet build src/Iptv.Presentation --configuration Release
+
+      - name: Test Iptv.Presentation
+        run: dotnet test tests/Iptv.Presentation.Tests --configuration Release
