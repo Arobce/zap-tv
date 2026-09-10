@@ -36,6 +36,68 @@ public sealed record CategoryListItem
 /// <summary>Stores and reads the provider's own grouping of its catalogue.</summary>
 public static class CategoryRepository
 {
+    /// <summary>
+    /// The bucket for entries whose category the provider never named.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// Providers serve streams filed under category ids that their own category listing
+    /// omits. On the reference account that is 13 ids covering 816 films — Spanish, Dutch,
+    /// Indian and Malaysian titles that are perfectly real and completely unreachable,
+    /// because every browse path goes through a name and these have none.
+    /// </para>
+    /// <para>
+    /// A bucket rather than a guess. The titles carry country prefixes and a name could be
+    /// derived from them, but that would be this application inventing provider metadata
+    /// and presenting it as the provider's — and being wrong about it silently. Listing
+    /// them under a label that says what it is keeps them browsable and keeps the claim
+    /// honest.
+    /// </para>
+    /// <para>
+    /// Parenthesised so it sorts and reads as a bucket rather than as a category called
+    /// Uncategorised, which is a name a provider could plausibly use itself.
+    /// </para>
+    /// </remarks>
+    public const string UncategorisedName = "(uncategorised)";
+
+    /// <summary>
+    /// How many entries of one kind are filed under a category nothing names.
+    /// </summary>
+    /// <remarks>
+    /// The <c>@kind</c> parameter appears twice because the series catalogue lives in its
+    /// own table; the caller picks the statement and this one covers <c>streams</c>.
+    /// Entries with no category at all are counted here too — <c>category_id</c> being NULL
+    /// makes the comparison NULL, so the subquery finds nothing and the row lands in this
+    /// bucket, which is right: a stream with no category is exactly as unbrowsable as one
+    /// whose category has no name.
+    /// </remarks>
+    private const string UnnamedStreamCountSql =
+        """
+        SELECT count(*)
+        FROM streams s
+        JOIN providers pr ON pr.id = s.provider_id AND pr.enabled = 1
+        WHERE s.kind = @kind
+          AND s.is_active = 1
+          AND s.is_separator = 0
+          AND NOT EXISTS (
+              SELECT 1 FROM categories cat
+               WHERE cat.provider_id = s.provider_id
+                 AND cat.kind        = @kind
+                 AND cat.category_id = s.category_id);
+        """;
+
+    private const string UnnamedSeriesCountSql =
+        """
+        SELECT count(*)
+        FROM series s
+        JOIN providers pr ON pr.id = s.provider_id AND pr.enabled = 1
+        WHERE NOT EXISTS (
+              SELECT 1 FROM categories cat
+               WHERE cat.provider_id = s.provider_id
+                 AND cat.kind        = 'series'
+                 AND cat.category_id = s.category_id);
+        """;
+
     /// <summary>Writes a provider's categories for one kind, replacing what was there.</summary>
     /// <remarks>
     /// Replace rather than merge, unlike stream sync. A category is provider metadata with
@@ -208,7 +270,44 @@ public static class CategoryRepository
             });
         }
 
+        var unnamed = await CountUnnamedAsync(connection, kind, cancellationToken).ConfigureAwait(false);
+
+        if (unnamed > 0)
+        {
+            // Appended after the sorted names rather than sorted among them. It is not a
+            // category, it is the place the ones without a category ended up, and it
+            // belongs at the bottom of the list for the same reason.
+            results.Add(new CategoryListItem
+            {
+                Name = UncategorisedName,
+                Count = unnamed,
+            });
+        }
+
         return results;
+    }
+
+    /// <summary>Counts what the provider filed under a category it never named.</summary>
+    private static async Task<int> CountUnnamedAsync(
+        SqliteConnection connection,
+        CategoryKind kind,
+        CancellationToken cancellationToken)
+    {
+        await using var command = connection.CreateCommand();
+
+        if (kind == CategoryKind.Series)
+        {
+            command.CommandText = UnnamedSeriesCountSql;
+        }
+        else
+        {
+            command.CommandText = UnnamedStreamCountSql;
+            command.Parameters.AddWithValue("@kind", ToStorage(kind));
+        }
+
+        var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
+
+        return value is null or DBNull ? 0 : Convert.ToInt32(value);
     }
 
     private static string ToStorage(CategoryKind kind) => kind switch
