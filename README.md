@@ -4,11 +4,16 @@ A Windows IPTV player for people who already have a provider and are tired of th
 came with it.
 
 Live TV, films and series from an Xtream Codes account, with a real electronic programme
-guide, a search that answers while you type across a library of 147,000 entries, and
+guide, a search that answers while you type no matter how large the library is, and
 automatic failover when a stream dies mid-programme.
 
 Built for .NET 10 and WinUI 3, with video decoded by libmpv and presented through a shared
 GPU texture. x64 and ARM64.
+
+![The channel list, with now and next against each channel](docs/images/zaptv-channel-list.png)
+
+*The video pane is deliberately empty. A screenshot of live television would put somebody
+else's copyrighted broadcast in this README.*
 
 > **Status: working, unsigned, and version 0.1.0.** It plays television every day on the
 > machine it was built on. It has never run on a second machine, an ARM64 device, or a
@@ -78,8 +83,8 @@ Then open Settings, add your provider's URL, username and password, and sync.
 ## What it does
 
 ### Live television
-- 20,322 live channels from the reference account, browsable by the provider's own
-  categories, searchable, and favouritable from any row.
+- Browsable by the provider's own categories, searchable, and favouritable from any row —
+  and it stays responsive at the tens of thousands of channels a large account carries.
 - Now and next against each channel, with a progress bar for the programme on air.
 - Automatic failover: when a stream dies, another copy of the same channel is opened without
   you touching anything.
@@ -87,15 +92,16 @@ Then open Settings, add your provider's URL, username and password, and sync.
   account rather than guessed. Exceeding it is how accounts get blocked.
 
 ### Films and series
-- 97,397 films and 29,161 series, drawn as poster grids — 99% of the catalogue has artwork.
+- Films and series drawn as poster grids, with a lettered placeholder behind every cover so
+  the ones a provider never supplied artwork for still read as distinct tiles.
 - Series open into seasons, seasons into episodes. A show with one season skips the season
   menu rather than making you click through a list of one.
 - Resume: anything you started and did not finish appears under Continue, with the position
   read at play time rather than when the row was drawn.
 
 ### The guide
-- A scrolling EPG grid, both axes virtualised, built from 180,680 programmes across 3,568
-  mapped channels.
+- A scrolling EPG grid, virtualised on both axes, so it opens at the same speed against a
+  guide of any size.
 - The guide refreshes itself when it runs short, rate-limited so a restart loop cannot
   hammer the provider.
 - Mappings are never written when the match is ambiguous. A wrong guide is worse than a
@@ -168,7 +174,7 @@ Every number below came from running the thing, mostly against a real provider.
 | EPG ingest, 67.5MB guide | **1.3s** parse + insert + swap, 1.6s including indexes, 202MB peak |
 | Search across the whole library | **66ms**, down from 8.7–19.8s before the FTS match was bounded |
 | Category listing | **3ms**, down from 806ms |
-| First frame on a live channel | **~1,027s average** across 94 real attempts |
+| First frame on a live channel | **~1.0s average** across 94 real attempts |
 | Recovery from a stream cut mid-playback | **5.16s**, against a 10s budget |
 | Delta update, one build to the next | **176KB** against a 133MB full package |
 | Artwork coverage | films 99.0%, series 99.9%, live 98.3% |
