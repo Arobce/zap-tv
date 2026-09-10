@@ -38,6 +38,14 @@ public sealed record SeriesRecord
 
     /// <summary>Seasons the listing declares, before any episode fetch.</summary>
     public int SeasonCount { get; init; }
+
+    /// <summary>The provider category this series is listed under, or null.</summary>
+    /// <remarks>
+    /// The provider's own id, not a name. Two providers reuse the same numeric ids for
+    /// different things, so it only means anything alongside the provider it came from -
+    /// which is why the categories table is keyed on both.
+    /// </remarks>
+    public string? CategoryId { get; init; }
 }
 
 /// <summary>Maps a provider's series listing to storage records.</summary>
@@ -69,6 +77,7 @@ public static class SeriesMapper
             Year = ParseYear(series.ReleaseDate),
             Rating = ParseRating(series.Rating),
             SeasonCount = series.Seasons.Count,
+            CategoryId = Clean(series.CategoryId),
         };
     }
 

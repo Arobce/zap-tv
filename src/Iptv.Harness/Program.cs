@@ -124,6 +124,12 @@ internal static class Program
         await TimeAsync("first page of series", async () =>
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
 
+        await TimeAsync("list series categories", async () =>
+             $"{(await CategoryRepository.GetCategoriesAsync(connection, CategoryKind.Series, cancellationToken)).Count} categories").ConfigureAwait(false);
+
+        await TimeAsync("series in a category", async () =>
+             $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Category = "SRS | ARABIC [EN]", Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
+
         await TimeAsync("rebuild search index", async () =>
         {
             await SearchRepository.RebuildStreamIndexAsync(connection, cancellationToken);
@@ -878,7 +884,7 @@ internal static class Program
         stopwatch.Stop();
 
         Console.WriteLine();
-        foreach (var kind in new[] { CategoryKind.Live, CategoryKind.Vod })
+        foreach (var kind in new[] { CategoryKind.Live, CategoryKind.Vod, CategoryKind.Series })
         {
             var listed = await CategoryRepository
                 .GetCategoriesAsync(connection, kind, cancellationToken).ConfigureAwait(false);
@@ -968,6 +974,12 @@ internal static class Program
             .ReplaceAsync(connection, providerId, CategoryKind.Vod, vod, cancellationToken)
             .ConfigureAwait(false);
         Console.WriteLine($"  vod   {written:N0} categories");
+
+        var seriesCategories = await CollectAsync(client.GetSeriesCategoriesAsync(cancellationToken)).ConfigureAwait(false);
+        written = await CategoryRepository
+            .ReplaceAsync(connection, providerId, CategoryKind.Series, seriesCategories, cancellationToken)
+            .ConfigureAwait(false);
+        Console.WriteLine($"  series {written:N0} categories");
 
         static async Task<List<(string CategoryId, string Name, int ParentId)>> CollectAsync(
             IAsyncEnumerable<XtreamCategory> source)

@@ -3,16 +3,20 @@ using Microsoft.Data.Sqlite;
 namespace Iptv.Core.Sources;
 
 /// <summary>Which catalogue a category belongs to.</summary>
-/// <remarks>
-/// No Series member. The provider does publish series categories, but the <c>series</c>
-/// table has no <c>category_id</c> to join them to and the listing DTO does not carry one,
-/// so supporting them is a schema change rather than another enum case. Left out rather
-/// than shipped as a menu that leads to empty screens.
-/// </remarks>
 public enum CategoryKind
 {
     Live,
     Vod,
+
+    /// <summary>
+    /// Counted against the <c>series</c> table rather than <c>streams</c>.
+    /// </summary>
+    /// <remarks>
+    /// Series are the one catalogue that does not live in <c>streams</c> — they carry no
+    /// streams at all until a user opens one and the episodes are fetched — so the count
+    /// query for this kind is a different statement, not the same one with a parameter.
+    /// </remarks>
+    Series,
 }
 
 /// <summary>One provider category, with how much is actually in it.</summary>
@@ -145,6 +149,34 @@ public static class CategoryRepository
         ORDER BY name;
         """;
 
+    /// <summary>
+    /// The same question against the <c>series</c> table.
+    /// </summary>
+    /// <remarks>
+    /// A separate statement rather than a branch inside the other one. Series have no
+    /// <c>is_active</c> and no <c>is_separator</c> — a series is a listing entry, not a
+    /// stream — so there is nothing to filter on and the counted set is simply what the
+    /// provider published.
+    /// </remarks>
+    public const string SeriesCategoryCountSql =
+        """
+        SELECT name, sum(n)
+        FROM (
+            SELECT
+                c.name AS name,
+                (SELECT count(*)
+                   FROM series s
+                  WHERE s.provider_id = c.provider_id
+                    AND s.category_id = c.category_id) AS n
+            FROM categories c
+            JOIN providers pr ON pr.id = c.provider_id AND pr.enabled = 1
+            WHERE c.kind = 'series'
+        )
+        GROUP BY name
+        HAVING sum(n) > 0
+        ORDER BY name;
+        """;
+
     /// <summary>Lists the categories that actually contain something, with counts.</summary>
     public static async Task<IReadOnlyList<CategoryListItem>> GetCategoriesAsync(
         SqliteConnection connection,
@@ -155,8 +187,15 @@ public static class CategoryRepository
 
         await using var command = connection.CreateCommand();
 
-        command.CommandText = CategoryCountSql;
-        command.Parameters.AddWithValue("@kind", ToStorage(kind));
+        if (kind == CategoryKind.Series)
+        {
+            command.CommandText = SeriesCategoryCountSql;
+        }
+        else
+        {
+            command.CommandText = CategoryCountSql;
+            command.Parameters.AddWithValue("@kind", ToStorage(kind));
+        }
 
         var results = new List<CategoryListItem>();
         await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
@@ -176,6 +215,7 @@ public static class CategoryRepository
     {
         CategoryKind.Live => "live",
         CategoryKind.Vod => "vod",
+        CategoryKind.Series => "series",
         _ => throw new ArgumentOutOfRangeException(nameof(kind), kind, "unmapped category kind"),
     };
 }

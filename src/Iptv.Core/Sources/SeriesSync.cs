@@ -40,22 +40,23 @@ public static class SeriesSync
                 """
                 INSERT INTO series
                     (provider_id, provider_series_id, title, normalized_title, series_key,
-                     plot, cover_url, year)
+                     plot, cover_url, year, category_id)
                 VALUES (@provider_id, @provider_series_id, @title, @normalized_title, @series_key,
-                        @plot, @cover_url, @year)
+                        @plot, @cover_url, @year, @category_id)
                 ON CONFLICT(provider_id, provider_series_id) DO UPDATE SET
                     title            = excluded.title,
                     normalized_title = excluded.normalized_title,
                     series_key       = excluded.series_key,
                     plot             = excluded.plot,
                     cover_url        = excluded.cover_url,
-                    year             = excluded.year;
+                    year             = excluded.year,
+                    category_id      = excluded.category_id;
                 """;
 
             foreach (var name in new[]
                      {
                          "@provider_id", "@provider_series_id", "@title", "@normalized_title",
-                         "@series_key", "@plot", "@cover_url", "@year",
+                         "@series_key", "@plot", "@cover_url", "@year", "@category_id",
                      })
             {
                 command.Parameters.Add(name, SqliteType.Text);
@@ -77,6 +78,7 @@ public static class SeriesSync
                 command.Parameters["@plot"].Value = (object?)record.Plot ?? DBNull.Value;
                 command.Parameters["@cover_url"].Value = (object?)record.CoverUrl ?? DBNull.Value;
                 command.Parameters["@year"].Value = (object?)record.Year ?? DBNull.Value;
+                command.Parameters["@category_id"].Value = (object?)record.CategoryId ?? DBNull.Value;
 
                 await command.ExecuteNonQueryAsync(cancellationToken).ConfigureAwait(false);
 
