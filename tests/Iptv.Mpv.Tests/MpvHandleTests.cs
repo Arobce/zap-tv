@@ -19,29 +19,10 @@ public sealed class MpvHandleTests
 
     public MpvHandleTests(ITestOutputHelper output) => _output = output;
 
-    private bool Available()
-    {
-        if (MpvLibrary.IsAvailable())
-        {
-            return true;
-        }
-
-        _output.WriteLine("libmpv-2.dll not present; skipping. Searched:");
-        foreach (var path in MpvLibrary.SearchedPaths)
-        {
-            _output.WriteLine("  " + path);
-        }
-
-        return false;
-    }
-
-    [Fact]
+    [SkippableFact]
     public void Reports_the_client_api_version()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         var (major, minor) = MpvHandle.ClientApiVersion;
         _output.WriteLine($"libmpv client API {major}.{minor}");
@@ -51,25 +32,19 @@ public sealed class MpvHandleTests
         Assert.True(major >= 2, $"Client API {major}.{minor} is older than the render API requires.");
     }
 
-    [Fact]
+    [SkippableFact]
     public void Creates_and_disposes_a_handle()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = MpvHandle.Create();
         Assert.False(handle.IsDisposed);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Applies_options_before_initialising()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         // vo=libmpv is the render-API output; it cannot be changed after initialise, which
         // is why options are applied between create and initialise.
@@ -83,13 +58,10 @@ public sealed class MpvHandleTests
         Assert.Equal("yes", handle.GetProperty("idle"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Reports_the_live_playback_profile_options()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         using var handle = MpvHandle.Create(new Dictionary<string, string>
         {
@@ -105,13 +77,10 @@ public sealed class MpvHandleTests
         Assert.Equal("auto-safe", handle.GetProperty("hwdec"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Rejects_an_unknown_option_loudly()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         var exception = Assert.Throws<MpvException>(
             () => MpvHandle.Create(new Dictionary<string, string> { ["not-a-real-option"] = "1" }));
@@ -123,13 +92,10 @@ public sealed class MpvHandleTests
         Assert.Contains("not-a-real-option", exception.Message, StringComparison.Ordinal);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Disposing_twice_is_safe()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         var handle = MpvHandle.Create();
         handle.Dispose();
@@ -138,13 +104,10 @@ public sealed class MpvHandleTests
         Assert.True(handle.IsDisposed);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Using_a_disposed_handle_throws_rather_than_crashing()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         var handle = MpvHandle.Create();
         handle.Dispose();
@@ -154,13 +117,10 @@ public sealed class MpvHandleTests
         Assert.Throws<ObjectDisposedException>(() => handle.SetProperty("pause", "yes"));
     }
 
-    [Fact]
+    [SkippableFact]
     public void Creating_many_handles_does_not_leak()
     {
-        if (!Available())
-        {
-            return;
-        }
+        Requires.LibMpv();
 
         // A crude check for the Phase 5 exit criterion about render context lifetime. If
         // handles leaked, 200 contexts would exhaust something well before the end.

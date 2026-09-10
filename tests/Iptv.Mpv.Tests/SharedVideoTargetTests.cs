@@ -29,47 +29,7 @@ public sealed class SharedVideoTargetTests
     public SharedVideoTargetTests(ITestOutputHelper output) => _output = output;
 
     /// <summary>Runs work on a dedicated thread holding a current GL context.</summary>
-    private void OnGlThread(Action body)
-    {
-        Exception? failure = null;
-
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                using var context = WglContext.Create();
-                context.MakeCurrent();
-
-                var capabilities = context.Query();
-                if (!capabilities.SupportsHardwarePath || !MpvLibrary.IsAvailable())
-                {
-                    _output.WriteLine(
-                        $"Skipping: hardware path {capabilities.SupportsHardwarePath}, " +
-                        $"libmpv {MpvLibrary.IsAvailable()} ({capabilities.Renderer}).");
-                    return;
-                }
-
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-            finally
-            {
-                WglContext.ClearCurrent();
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join(TimeSpan.FromMinutes(2));
-
-        if (failure is not null)
-        {
-            throw new Xunit.Sdk.XunitException(failure.ToString());
-        }
-    }
+    private static void OnGlThread(Action body) => GlThread.Run(body);
 
     private static MpvHandle CreateHandle() => MpvHandle.Create(new Dictionary<string, string>
     {
@@ -79,7 +39,7 @@ public sealed class SharedVideoTargetTests
         ["audio"] = "no",
     });
 
-    [Fact]
+    [SkippableFact]
     public void Creates_a_texture_shared_between_d3d11_and_opengl()
     {
         OnGlThread(() =>
@@ -92,7 +52,7 @@ public sealed class SharedVideoTargetTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Mpv_pixels_reach_the_d3d11_texture()
     {
         OnGlThread(() =>
@@ -133,7 +93,7 @@ public sealed class SharedVideoTargetTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Sustains_rendering_through_the_shared_texture()
     {
         OnGlThread(() =>
@@ -170,7 +130,7 @@ public sealed class SharedVideoTargetTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Repeated_create_and_dispose_cycles_are_clean()
     {
         OnGlThread(() =>
@@ -186,7 +146,7 @@ public sealed class SharedVideoTargetTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Disposing_twice_is_safe()
     {
         OnGlThread(() =>

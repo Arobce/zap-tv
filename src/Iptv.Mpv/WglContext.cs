@@ -1,7 +1,27 @@
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using Iptv.Mpv.Native;
 
 namespace Iptv.Mpv;
+
+/// <summary>
+/// This machine cannot provide an OpenGL context at all.
+/// </summary>
+/// <remarks>
+/// <para>
+/// Distinct from a context that was created and turned out to be too old, which
+/// <see cref="WglContext.Capabilities"/> reports. This is the case where creation itself
+/// is refused: a server or virtual machine with no display driver has no pixel format that
+/// supports OpenGL, so there is nothing to inspect the capabilities of.
+/// </para>
+/// <para>
+/// Its own type so callers can tell it apart from a bug without matching on a message.
+/// A GitHub runner answers <c>wglCreateContext failed (Win32 error 2000)</c>, which a test
+/// must treat as "not applicable here" and an application must treat as "use the software
+/// path" — and neither should be reading error codes out of a string to find that out.
+/// </para>
+/// </remarks>
+public sealed class OpenGlUnavailableException(string message) : InvalidOperationException(message);
 
 /// <summary>
 /// An OpenGL context created through WGL on a hidden window.
@@ -65,7 +85,31 @@ public sealed class WglContext : IDisposable
             !Renderer.Contains("GDI Generic", StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// Creates a context, or reports that this machine has none to give.
+    /// </summary>
+    /// <remarks>
+    /// False means no OpenGL at all — a driverless VM or a build agent. Anything else
+    /// still throws, because a window that cannot be created is a bug here rather than a
+    /// property of the machine, and swallowing it would turn it into a silent fallback to
+    /// software rendering that nobody asked for.
+    /// </remarks>
+    public static bool TryCreate([NotNullWhen(true)] out WglContext? context)
+    {
+        try
+        {
+            context = Create();
+            return true;
+        }
+        catch (OpenGlUnavailableException)
+        {
+            context = null;
+            return false;
+        }
+    }
+
     /// <summary>Creates a context, or throws if WGL rejects the request.</summary>
+    /// <exception cref="OpenGlUnavailableException">This machine has no OpenGL.</exception>
     public static WglContext Create()
     {
         EnsureWindowClass();
@@ -105,17 +149,19 @@ public sealed class WglContext : IDisposable
                 iLayerType = Win32.PfdMainPlane,
             };
 
+            // Both of these mean the machine has no OpenGL, rather than that something
+            // went wrong doing it. A headless VM reaches here and gets refused.
             var format = Win32.ChoosePixelFormat(deviceContext, ref descriptor);
             if (format == 0 || !Win32.SetPixelFormat(deviceContext, format, ref descriptor))
             {
-                throw new InvalidOperationException(
+                throw new OpenGlUnavailableException(
                     $"No suitable OpenGL pixel format (Win32 error {Marshal.GetLastWin32Error()}).");
             }
 
             glContext = Win32.wglCreateContext(deviceContext);
             if (glContext == IntPtr.Zero)
             {
-                throw new InvalidOperationException(
+                throw new OpenGlUnavailableException(
                     $"wglCreateContext failed (Win32 error {Marshal.GetLastWin32Error()}).");
             }
 

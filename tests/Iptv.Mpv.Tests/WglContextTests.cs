@@ -18,9 +18,11 @@ public sealed class WglContextTests
 
     public WglContextTests(ITestOutputHelper output) => _output = output;
 
-    [Fact]
+    [SkippableFact]
     public void Creates_a_context_and_reports_what_the_driver_supports()
     {
+        Requires.OpenGl();
+
         using var context = WglContext.Create();
         context.MakeCurrent();
 
@@ -40,9 +42,11 @@ public sealed class WglContextTests
         Assert.NotEqual("unknown", capabilities.Version);
     }
 
-    [Fact]
+    [SkippableFact]
     public void Resolves_core_gl_functions_that_wglGetProcAddress_does_not_return()
     {
+        Requires.OpenGl();
+
         using var context = WglContext.Create();
         context.MakeCurrent();
 
@@ -59,9 +63,11 @@ public sealed class WglContextTests
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public void Resolves_nothing_for_a_function_that_does_not_exist()
     {
+        Requires.OpenGl();
+
         using var context = WglContext.Create();
         context.MakeCurrent();
 
@@ -78,7 +84,7 @@ public sealed class WglContextTests
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public void Contexts_can_be_created_and_destroyed_repeatedly()
     {
         // Each context owns a hidden window and a device context. Leaking either exhausts
@@ -91,7 +97,7 @@ public sealed class WglContextTests
         }
     }
 
-    [Fact]
+    [SkippableFact]
     public void Disposing_twice_is_safe()
     {
         var context = WglContext.Create();

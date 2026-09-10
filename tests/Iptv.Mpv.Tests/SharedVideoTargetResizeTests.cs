@@ -19,46 +19,9 @@ public sealed class SharedVideoTargetResizeTests
 
     public SharedVideoTargetResizeTests(ITestOutputHelper output) => _output = output;
 
-    private void OnGlThread(Action body)
-    {
-        Exception? failure = null;
+    private static void OnGlThread(Action body) => GlThread.Run(body);
 
-        var thread = new Thread(() =>
-        {
-            try
-            {
-                using var context = WglContext.Create();
-                context.MakeCurrent();
-
-                if (!context.Query().SupportsHardwarePath || !MpvLibrary.IsAvailable())
-                {
-                    _output.WriteLine("Hardware path or libmpv unavailable; skipping.");
-                    return;
-                }
-
-                body();
-            }
-            catch (Exception exception)
-            {
-                failure = exception;
-            }
-            finally
-            {
-                WglContext.ClearCurrent();
-            }
-        });
-
-        thread.SetApartmentState(ApartmentState.STA);
-        thread.Start();
-        thread.Join(TimeSpan.FromMinutes(2));
-
-        if (failure is not null)
-        {
-            throw new Xunit.Sdk.XunitException(failure.ToString());
-        }
-    }
-
-    [Fact]
+    [SkippableFact]
     public void Resizing_changes_the_reported_size()
     {
         OnGlThread(() =>
@@ -71,7 +34,7 @@ public sealed class SharedVideoTargetResizeTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Resizing_keeps_the_same_d3d_device()
     {
         OnGlThread(() =>
@@ -88,7 +51,7 @@ public sealed class SharedVideoTargetResizeTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Resizing_produces_a_working_surface()
     {
         OnGlThread(() =>
@@ -121,7 +84,7 @@ public sealed class SharedVideoTargetResizeTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Resizing_to_the_same_size_is_a_no_op()
     {
         OnGlThread(() =>
@@ -137,7 +100,7 @@ public sealed class SharedVideoTargetResizeTests
         });
     }
 
-    [Fact]
+    [SkippableFact]
     public void Repeated_resizes_do_not_leak()
     {
         OnGlThread(() =>
