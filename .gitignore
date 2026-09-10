@@ -486,8 +486,12 @@ $RECYCLE.BIN/
 *.db-wal
 *.db-shm
 logs/
-native/
 BenchmarkDotNet.Artifacts/
+
+# No bare "native/" here. It was meant for the fetched libmpv binaries, which the
+# ".local/" rule below already covers - and because git is case-insensitive on Windows it
+# also matched src/Iptv.Mpv/Native/, quietly keeping the entire P/Invoke layer out of the
+# repository. Everything still built locally and nothing that cloned it built at all.
 
 # Local provider credentials - never commit
 .local/
