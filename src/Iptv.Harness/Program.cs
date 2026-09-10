@@ -124,6 +124,9 @@ internal static class Program
         await TimeAsync("first page of series", async () =>
              $"{(await LibraryRepository.GetSeriesAsync(connection, new CatalogueQuery { Limit = 100 }, cancellationToken)).Count} rows").ConfigureAwait(false);
 
+        await TimeAsync("uncategorised films", async () =>
+             $"{(await LibraryRepository.CountFilmsAsync(connection, new CatalogueQuery { Category = CategoryRepository.UncategorisedName }, cancellationToken)):N0} films").ConfigureAwait(false);
+
         await TimeAsync("list series categories", async () =>
              $"{(await CategoryRepository.GetCategoriesAsync(connection, CategoryKind.Series, cancellationToken)).Count} categories").ConfigureAwait(false);
 
@@ -937,26 +940,58 @@ internal static class Program
             """;
 
         var any = false;
-        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
-        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false))
         {
-            any = true;
-            Console.WriteLine(
-                $"  {reader.GetString(0),-8} {reader.GetInt32(1),4} unnamed ids covering {reader.GetInt32(2):N0} streams");
+            while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+            {
+                any = true;
+                Console.WriteLine(
+                    $"  {reader.GetString(0),-8} {reader.GetInt32(1),4} unnamed ids covering {reader.GetInt32(2):N0} streams");
+            }
         }
 
         if (!any)
         {
             Console.WriteLine("  none - every stream's category has a name");
+            return;
+        }
+
+        // The ids themselves, with a title from each. A count says how much is unreachable;
+        // this says what it is, which is the difference between a provider that omits a
+        // category on purpose and a sync that lost one.
+        Console.WriteLine();
+
+        await using var detail = connection.CreateCommand();
+        detail.CommandText =
+            """
+            SELECT s.kind, s.category_id, count(*), min(s.title)
+            FROM streams s
+            WHERE s.is_active = 1
+              AND s.is_separator = 0
+              AND s.category_id IS NOT NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM categories c
+                   WHERE c.provider_id = s.provider_id
+                     AND c.category_id = s.category_id
+                     AND c.kind = CASE s.kind WHEN 'live' THEN 'live' ELSE 'vod' END)
+            GROUP BY s.kind, s.category_id
+            ORDER BY count(*) DESC;
+            """;
+
+        await using var rows = await detail.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await rows.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            var title = rows.IsDBNull(3) ? "(untitled)" : rows.GetString(3);
+            Console.WriteLine(
+                $"    {rows.GetString(0),-6} id {rows.GetString(1),-6} {rows.GetInt32(2),6:N0}  e.g. {Truncate(title, 48)}");
         }
     }
 
-    /// <summary>Stores the provider's category names for live and VOD.</summary>
-    /// <remarks>
-    /// Series categories are fetched by the client but not stored: the <c>series</c> table
-    /// has no <c>category_id</c> to join them to, so keeping them would build a menu that
-    /// leads to empty screens.
-    /// </remarks>
+    private static string Truncate(string value, int length)
+        => value.Length <= length ? value : value[..(length - 1)] + "…";
+
+    /// <summary>Stores the provider's category names for live, VOD and series.</summary>
     private static async Task SyncCategoriesAsync(
         SqliteConnection connection,
         XtreamClient client,

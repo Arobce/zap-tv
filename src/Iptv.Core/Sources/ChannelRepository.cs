@@ -113,7 +113,12 @@ public static class ChannelRepository
                              WHERE cat.provider_id = s.provider_id
                                AND cat.kind        = 'live'
                                AND cat.category_id = s.category_id
-                               AND cat.name        = @category)))
+                               AND cat.name        = @category)
+                          OR (@uncategorised = 1 AND NOT EXISTS (
+                            SELECT 1 FROM categories cat
+                             WHERE cat.provider_id = s.provider_id
+                               AND cat.kind        = 'live'
+                               AND cat.category_id = s.category_id))))
             ORDER BY
                 c.is_favorite DESC,
                 COALESCE(c.user_sort_order, 2147483647),
@@ -125,6 +130,8 @@ public static class ChannelRepository
         command.Parameters.AddWithValue("@search", (object?)query.Search ?? DBNull.Value);
         command.Parameters.AddWithValue("@favourites", query.FavouritesOnly ? 1 : 0);
         command.Parameters.AddWithValue("@category", (object?)query.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue(
+            "@uncategorised", LibraryRepository.IsUncategorised(query.Category) ? 1 : 0);
         command.Parameters.AddWithValue("@limit", query.Limit);
         command.Parameters.AddWithValue("@offset", query.Offset);
 

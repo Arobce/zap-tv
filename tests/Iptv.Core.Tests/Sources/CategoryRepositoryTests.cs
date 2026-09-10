@@ -173,7 +173,16 @@ public sealed class CategoryRepositoryTests
         // unlike a channel.
         await ReplaceAsync(connection, 1, CategoryKind.Live, ("1", "Sports", 0));
 
-        Assert.Equal("Sports", Assert.Single(await ListAsync(connection)).Name);
+        var remaining = await ListAsync(connection);
+
+        Assert.Equal("Sports", remaining[0].Name);
+
+        // BBC News did not go anywhere — only the name for its category did. It lands in
+        // the bucket, which is exactly the case that bucket exists for: a row the provider
+        // still serves under an id it no longer names.
+        Assert.Equal(CategoryRepository.UncategorisedName, remaining[1].Name);
+        Assert.Equal(1, remaining[1].Count);
+        Assert.Equal(2, remaining.Count);
     }
 
     [Fact]

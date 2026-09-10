@@ -97,7 +97,15 @@ public static class LibraryRepository
                       WHERE cat.provider_id = s.provider_id
                         AND cat.kind        = 'vod'
                         AND cat.category_id = s.category_id
-                        AND cat.name        = @category))
+                        AND cat.name        = @category)
+                   -- The bucket. 816 films on the reference account are filed under ids
+                   -- the provider's own category listing never mentions, and every other
+                   -- browse path reaches a row through a name.
+                   OR (@uncategorised = 1 AND NOT EXISTS (
+                     SELECT 1 FROM categories cat
+                      WHERE cat.provider_id = s.provider_id
+                        AND cat.kind        = 'vod'
+                        AND cat.category_id = s.category_id)))
             GROUP BY s.channel_key
             ORDER BY min(s.title)
             LIMIT @limit OFFSET @offset;
@@ -152,7 +160,12 @@ public static class LibraryRepository
                       WHERE cat.provider_id = s.provider_id
                         AND cat.kind        = 'series'
                         AND cat.category_id = s.category_id
-                        AND cat.name        = @category))
+                        AND cat.name        = @category)
+                   OR (@uncategorised = 1 AND NOT EXISTS (
+                     SELECT 1 FROM categories cat
+                      WHERE cat.provider_id = s.provider_id
+                        AND cat.kind        = 'series'
+                        AND cat.category_id = s.category_id)))
             GROUP BY s.series_key
             ORDER BY (max(s.year) IS NULL), max(s.year) DESC, min(s.title)
             LIMIT @limit OFFSET @offset;
@@ -200,11 +213,17 @@ public static class LibraryRepository
                       WHERE cat.provider_id = s.provider_id
                         AND cat.kind        = 'vod'
                         AND cat.category_id = s.category_id
-                        AND cat.name        = @category));
+                        AND cat.name        = @category)
+                   OR (@uncategorised = 1 AND NOT EXISTS (
+                     SELECT 1 FROM categories cat
+                      WHERE cat.provider_id = s.provider_id
+                        AND cat.kind        = 'vod'
+                        AND cat.category_id = s.category_id)));
             """;
 
         command.Parameters.AddWithValue("@search", (object?)query.Search ?? DBNull.Value);
         command.Parameters.AddWithValue("@category", (object?)query.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue("@uncategorised", IsUncategorised(query.Category) ? 1 : 0);
 
         var value = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false);
         return value is null or DBNull ? 0 : Convert.ToInt32(value);
@@ -214,7 +233,17 @@ public static class LibraryRepository
     {
         command.Parameters.AddWithValue("@search", (object?)query.Search ?? DBNull.Value);
         command.Parameters.AddWithValue("@category", (object?)query.Category ?? DBNull.Value);
+        command.Parameters.AddWithValue("@uncategorised", IsUncategorised(query.Category) ? 1 : 0);
         command.Parameters.AddWithValue("@limit", query.Limit);
         command.Parameters.AddWithValue("@offset", query.Offset);
     }
+
+    /// <summary>Whether the chosen category is the bucket rather than a provider name.</summary>
+    /// <remarks>
+    /// Ordinal, deliberately. This matches a constant this application produces, not text a
+    /// user typed, and a culture-aware comparison here would be a way for the bucket to
+    /// stop matching itself on somebody's machine.
+    /// </remarks>
+    internal static bool IsUncategorised(string? category)
+        => string.Equals(category, CategoryRepository.UncategorisedName, StringComparison.Ordinal);
 }
